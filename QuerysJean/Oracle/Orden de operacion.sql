@@ -1,0 +1,216 @@
+--consulta cliente
+select * from bg_admin.t_cltefil
+WHERE clkey = 3452741
+CLCDID = '0903858967'
+
+--actualiza segmento cliente
+update bg_admin.t_cltefil
+set clsegestra ='PE'
+WHERE CLCDID = '1300917042'
+
+--consulta cuenta ahorro
+select MSCDID IDENTIFICACION, CL.CLNOM1 NOMBRES, MSCTA NUMERO_CTA, MSSTAT ESTADO, MSSAUS SALDO, MSEFUS SALDO_EFECTIVO, MSORIGCTA ORIGENCTA, MSMTST MOTIVO,
+MSNTIT, MSTTIT, MSNREP, MSNFAU
+from bg_admin.t_ahmaest A,
+bg_admin.t_cltefil CL
+where  A.MSCDCL = CL.CLKEY
+and a.mscdid = '0301105094'
+--AND msstat = 0
+
+/*
+1) La cuenta no puede estar sobregirada es "MARCA-SOBREGIRO" deber se distinto de "S"
+2) El origen de la cuenta no debe ser digital "ORIGEN-CUENTA"�
+es decir debe ser distinto de:
+"CB"(cuentas corresponsal no bancario),�
+"NW" (cuentas aperturadas en neoweb),
+"WC" (cuentas caminantes que los asesores salen a vender)
+3) La cuenta debe ser de firma individual
+4) La cuenta debe ser del tipo CC (CORREIENTE) O CA (AHORRO)
+*/
+
+--actualiza estado de la cuenta Ahorros a Activo
+update bg_admin.t_ahmaest A
+set MSSAUS = 2000, MSEFUS = 2000 
+where  mscdid = '0911522837'
+
+select *from bg_admin.t_ahmaest A
+where MSCTA='23266258'
+
+update bg_admin.t_ahmaest A
+set msstat=0
+where MSCTA='23266258'
+commit
+/*
+MSSTAT
+0 ACTIVA
+1 INACTIVA
+2 INACTIVA/AUDITORIA
+3 FONDOS BLOQUEADOS
+5 CERRADA
+*/
+
+
+--consulta cuenta corriente
+select *
+--mtrucced IDENTIFICACION, CL.CLNOM1 NOMBRES,  MTCUENTA NUMERO_CTA , MTSTATUS ESTADO, MTSALTOT SALDO, MTEFECTV SALDO_EFECTIVO
+from bg_admin.t_maestro C,
+bg_admin.t_cltefil CL
+where C.MTCODCLT = CL.CLKEY
+AND mtrucced  = '0301105094'
+--mtstatus = 1
+
+update bg_admin.t_maestro C
+set MTSTATUS = 0
+where mtrucced  = '0928429737'
+
+
+--consulta cuenta amiga
+select makcuen_identificacion IDENTIFICACION, MAKCUEN_NRO_CUENTA NUMERO_CTA, MAKCUEN_ESTATUS_CUENTA ESTADO, MAKCUEN_SALDO_TOTAL SALDO, MAKCUEN_SALDO_EFECTIVO SALDO_EFECTIVO
+from bg_admin.t_MAKCUEN
+where makcuen_identificacion = 'X6133648'
+
+
+
+--cuenta rol electronico
+select * from bg_admin.t_rekcuen
+
+
+--Movimientos
+
+select CTKMOVD_CUENTA, CTKMOVD_FECHA, CTKMOVD_HORA,�MVTIPO, MVMOTV, MVFECH, MVCTA, MVDOCU, MVMONT, CTKMOVD_NOTA_DIREC,MVCIUD, MVTPDP,CTKMOVD_TERM_ADICIONA, MVHORA 
+FROM BG_ADMIN.T_CTKMOVD 
+WHERE CTKMOVD_CUENTA = 3812456 AND CTKMOVD_FECHA = 20220928 AND MVMOTV IN ('QI1', 'QI2', 'QI3', 'QI4', 'RJE','RJA','RJB','RJC','RJD','RJE','RJF','RJG')
+
+--Movimientos de cartera
+select *
+FROM BG_ADMIN.T_SOKMOVI
+
+--Lo que se va a contabilizar
+select *
+FROM BG_ADMIN.T_SOKLOGO
+------------------------
+--SOLICITUDES DE CREDITO
+------------------------
+
+--INTEGRANTES DEL CREDITO
+SELECT * FROM BG_ADMIN.T_SCKSCRL 
+WHERE SCKSCRL_CODIGO_IDENTIF = '0992251069001'
+AND SCKSCRL_FECHA_INFORME > 20210601
+
+--SOLICITUD
+SELECT * FROM BG_ADMIN.T_SCKSCBA
+WHERE SCKSCBA_NUMERO_SOLICITUD = 011000174
+--SCKSCBA-TIPO-EXPEDIENTE = 'R' para saber si la solicitud fu e
+
+
+SELECT *
+FROM BG_ADMIN.T_SCKSCRL A 
+JOIN  BG_ADMIN.T_SCKSCBA B 
+ON  A.SCKSCRL_NUMERO_SOLICITUD = B.SCKSCBA_NUMERO_SOLICITUD
+WHERE SCKSCRL_CODIGO_IDENTIF = '0992251069001'
+and SCKSCBA_ESTATUS_SOLICITUD IN ('D','P', 'A') 
+
+
+select  * 
+FROM BG_ADMIN.T_BCKSLMC 
+where MS_CDIDEN = '0992251069001' and
+  MS_SITUAC in ('P','I','R','A')
+AND MS_FECI > 0
+
+---------------------
+--ORDEN DE OPERACION
+---------------------
+select *
+from BG_ADMIN.T_BCKORDE
+where BCCLTE = 333338 
+AND bcstatus = 'P'
+ and BCPROD NOT IN('NN','NV','NM','IN', 'II', 'FE', 'GA','CC', 'JC','LG','XI','JR','IV')
+ 
+select *
+from BG_ADMIN.T_BCKORDE
+where   BCPROD='CZ'order by BCFECCON desc;
+
+
+select bcstatus
+from BG_ADMIN.T_BCKORDE
+where BCNUMORD='103619' and  BCPROD='CZ';
+
+--solicitudes sin orden liquidada
+select  MS_SITUAC, MS_FEC_LIQUID, BCPROD, MS_CDCLTE, MS_BCOP, MS_PLAZA, MS_SECUEN, MS_TPIDEN, MS_CDIDEN, MS_FECI,
+C.BCFEC_ING, (BCFEC_ING - NVL(MS_FECI,0)) AS DIAS_TRANSCURRIDOS
+from BG_ADMIN.T_BCKSLMC  B  
+  join BG_ADMIN.T_CLTEFIL  CL
+      ON CL.CLKEY = B.MS_CDCLTE 
+LEFT JOIN BG_ADMIN.T_BCKORDE   C 
+   ON B.MS_CDCLTE = C.BCCLTE AND B.MS_BCOP = C.BCNUMORD
+   WHERE  CL.CLCDID =  '1300917042'
+    AND   MS_SITUAC in ('P','I','R','A')
+       AND (MS_FEC_LIQUID IS NULL OR  MS_FEC_LIQUID = 0)
+
+
+--una vez aprobada la orden se crea el credito
+----------
+--CREDITO
+---------
+--cabecera
+select *
+--SOKDODG_PER_TABLA  --PERIODICIDAD DE LOS DIVIDENDOS
+from BG_ADMIN.T_SOKDODG
+where-- SOKDODG_PER_TABLA != 'M'
+sokdodg_cliente = 1205936
+and sokdodg_orden_operac = 442670;
+
+--detalle
+SELECT  * FROM    BG_ADMIN.T_SOKDODT
+ WHERE   SOKDODT_CLIENTE    = 1205936
+AND     SOKDODT_TIPO       = 'MC'
+AND     SOKDODT_NUMERO_DOC = 1420920
+AND     SOKDODT_ESTATUS NOT IN ('C', 'R')
+ORDER BY SOKDODT_FECHA_VCTO 
+
+660311
+
+select *
+--sum(sokdodt_capital) capital, sum(sokdodt_interes) interes 
+from BG_ADMIN.T_SOKDODT
+where /*sokdodt_cliente = 405791
+and sokdodt_numero_doc = 104537*/
+     SOKDODT_ESTATUS not IN ('C', 'R')
+AND     SOKDODT_ESTATUS_REG = 'A'
+AND SOKDODT_TIPO = 'MC'
+AND SOKDODT_FECHA_vcto >= 20231008
+and SOKDODT_CLIENTE >  1191839
+order by SOKDODT_ESTATUS
+--SOKDODT_ESTATUS: C - CANCELADO, R - RENOVADA
+
+--SEGUIMIENTO DE CREDITO
+select *
+from BG_ADMIN.T_OBLIGAC
+where OBCLCLTE = 16829
+AND OBDCDOCU = 544238
+
+--CREDTIOS CANCELADOS EN UN 40%
+Create GLOBAL Temporary table TMP_SOKDODT_ACC On COMMIT PRESERVE ROWS As
+Select C.CLCDID, SOKDODT_CLIENTE,SOKDODT_FECHA_CONC,SOKDODT_KEY_INDICE_2,SOKDODT_TIPO,SOKDODT_NUMERO_DOC,SUM(SOKDODT_CAPITAL - SOKDODT_PAG_CAPITAL) AS SALDO_CAPITAL
+from T_SOKDODT , T_CLTEFIL C
+Where C.CLKEY = SOKDODT_CLIENTE 
+AND SOKDODT_TIPO = 'MC'
+AND SOKDODT_ESTATUS = ' '
+AND SOKDODT_ESTATUS_REG <> 'E'
+AND EXISTS (SELECT 1 FROM BG_ADMIN.T_CLTEFIL x WHERE x.clkey = SOKDODT_CLIENTE AND x.clsegestra = 'PP')
+GROUP BY  C.CLCDID, SOKDODT_CLIENTE,SOKDODT_FECHA_CONC,SOKDODT_KEY_INDICE_2,SOKDODT_TIPO,SOKDODT_NUMERO_DOC;
+
+0802952150  - 1425223 - 3623365
+0909043531  - 112284  - 235884
+1304315615  - 1041566 - 1275705
+SELECT a.CLCDID,a.CLSEGESTRA,SOKDODT_CLIENTE, SOKDODT_TIPO, SOKDODT_NUMERO_DOC, SOKDODT_FECHA_CONC, SOKDODG_TOTAL, SALDO_CAPITAL,round((100*SALDO_CAPITAL)/SOKDODG_TOTAL,2) "% Por Pagar"
+FROM T_SOKDODG, TMP_SOKDODT_ACC , T_CLTEFIL a
+WHERE SOKDODG_CLIENTE = SOKDODT_CLIENTE
+AND SOKDODG_FECHA_CONC = SOKDODT_FECHA_CONC
+AND SOKDODG_KEY_INDICE = SOKDODT_KEY_INDICE_2
+AND SALDO_CAPITAL <= (SOKDODG_TOTAL*0.4)
+AND SALDO_CAPITAL >= (SOKDODG_TOTAL*0.39)
+AND EXISTS (SELECT 1 FROM BG_ADMIN.T_CLTEFIL x WHERE x.clkey = SOKDODG_CLIENTE AND x.clsegestra = 'PP')
+AND a.clkey = SOKDODT_CLIENTE;
+
+

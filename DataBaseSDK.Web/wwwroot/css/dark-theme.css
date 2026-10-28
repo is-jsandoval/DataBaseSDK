@@ -1,0 +1,166 @@
+/* Tema oscuro para todo el sitio. Bootstrap 5.1 (en wwwroot/lib) no trae soporte nativo de [data-bs-theme] (eso llegó
+   recién en 5.3), así que se pisa a mano en vez de depender de las variables de Bootstrap: cualquier estilo nuevo tiene
+   que usar las variables --db-* de acá (si usa --bs-body-bg o similares queda blanco sobre blanco). */
+
+:root {
+    --db-bg: #181818;
+    --db-surface: #252526;
+    --db-surface-2: #2d2d30;
+    --db-border: #3c3c3c;
+    --db-text: #e1e1e1;
+    --db-text-muted: #9d9d9d;
+    --db-link: #4fc1ff;
+}
+
+body {
+    background-color: var(--db-bg);
+    color: var(--db-text);
+}
+
+a {
+    color: var(--db-link);
+}
+
+a:hover {
+    color: #7fd4ff;
+}
+
+.text-muted {
+    color: var(--db-text-muted) !important;
+}
+
+hr {
+    border-color: var(--db-border);
+}
+
+/* Navbar */
+.navbar .navbar-brand,
+.navbar .nav-link {
+    color: var(--db-text) !important;
+}
+
+/* Cards y tablas */
+.card,
+.table {
+    background-color: var(--db-surface);
+    color: var(--db-text);
+    border-color: var(--db-border);
+}
+
+.card-header {
+    background-color: var(--db-surface-2);
+    border-color: var(--db-border);
+    color: var(--db-text);
+}
+
+.table {
+    --bs-table-bg: var(--db-surface);
+    --bs-table-color: var(--db-text);
+    --bs-table-border-color: var(--db-border);
+    --bs-table-striped-bg: #2a2a2b;
+    --bs-table-hover-bg: #2f2f31;
+    --bs-table-hover-color: var(--db-text);
+}
+
+/* Formularios */
+.form-control,
+.form-select {
+    background-color: var(--db-surface-2);
+    color: var(--db-text);
+    border-color: var(--db-border);
+}
+
+.form-control:focus,
+.form-select:focus {
+    background-color: var(--db-surface-2);
+    color: var(--db-text);
+    border-color: var(--db-link);
+    box-shadow: 0 0 0 .2rem rgba(79, 193, 255, .25);
+}
+
+.form-control::placeholder {
+    color: var(--db-text-muted);
+}
+
+.form-control option,
+.form-select option {
+    background-color: var(--db-surface-2);
+    color: var(--db-text);
+}
+
+.form-label,
+label {
+    color: var(--db-text);
+}
+
+/* Botones outline */
+.btn-outline-secondary {
+    color: var(--db-text);
+    border-color: #6c757d;
+}
+
+.btn-outline-secondary:hover {
+    background-color: #6c757d;
+    color: #fff;
+}
+
+.btn-outline-primary {
+    color: var(--db-link);
+    border-color: var(--db-link);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--db-link);
+    color: #062533;
+}
+
+/* Alertas */
+.alert-danger {
+    background-color: #4a1f22;
+    color: #f5b8bd;
+    border-color: #6e2b30;
+}
+
+.alert-success {
+    background-color: #1e3a24;
+    color: #a8e6b0;
+    border-color: #2c5233;
+}
+
+.alert-info {
+    background-color: #16333d;
+    color: #9fdcf0;
+    border-color: #1f4a58;
+}
+
+/* Badges: Bootstrap 5.1 fuerza texto blanco en .badge, así que sobre fondos claros (bg-light/warning/info) queda ilegible. */
+.badge.bg-light,
+.badge.bg-warning,
+.badge.bg-info {
+    color: #212529 !important;
+}
+
+/* Modales — Bootstrap 5.1 los trae con fondo blanco; con el texto claro del tema quedaban ilegibles. */
+.modal-content {
+    background-color: var(--db-surface);
+    color: var(--db-text);
+    border: 1px solid var(--db-border);
+}
+
+.modal-header,
+.modal-footer {
+    border-color: var(--db-border);
+}
+
+.modal-content .form-text {
+    color: var(--db-text-muted);
+}
+
+.btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
+}
+
+/* Footer */
+footer.footer {
+    border-color: var(--db-border) !important;
+}

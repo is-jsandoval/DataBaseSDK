@@ -1,0 +1,21 @@
+@page
+@model ErrorModel
+@{
+    ViewData["Title"] = "Error";
+}
+
+<h1 class="text-danger">Error</h1>
+<h2 class="text-danger">Algo falló al procesar la petición.</h2>
+
+@if (Model.ShowRequestId)
+{
+    <p>
+        <strong>Id de la petición:</strong> <code>@Model.RequestId</code>
+    </p>
+}
+
+<p class="text-muted">
+    Los errores de las consultas a las bases salen dentro de la propia consola, con el mensaje del driver.
+    Esta página es para fallos inesperados del sitio: el detalle está en la ventana donde corre el servidor.
+</p>
+<p><a asp-page="/Index">Volver al inicio</a></p>

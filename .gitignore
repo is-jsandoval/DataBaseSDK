@@ -1,0 +1,8 @@
+bin/
+obj/
+.env
+.vs/
+.vscode/
+
+# Datos locales: conexiones guardadas (con la clave cifrada por DPAPI) y la bitácora de ediciones de filas (datos reales de las bases)
+.local/

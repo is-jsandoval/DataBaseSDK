@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- DPAPI (ProtectedData) es solo de Windows: las conexiones guardadas desde la UI se cifran con el usuario de Windows. Esta herramienta corre en Windows. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Núcleo de DataBaseSDK: consultas Oracle / SQL Server contra bases locales o de red (como SQL Developer / SSMS), sin
+    ninguna interfaz. Los dos drivers oficiales viven acá y en ningún otro proyecto.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.9.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DataBaseSDK.Tests" />
+  </ItemGroup>
+
+</Project>

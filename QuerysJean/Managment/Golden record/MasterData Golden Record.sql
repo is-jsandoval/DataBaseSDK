@@ -1,0 +1,22 @@
+--172.26.60.134
+--inq_kmoreira
+SELECT * FROM [BG_MasterData].[Empresas].BG_TB_Administradores_Representantes where RUC_COMPANIA='1718085929001'  order by FechaCarga desc
+SELECT * FROM [BG_MasterData].[Empresas].BG_TB_Administradores_Representantes where IDENTIFICACION='0954121646' and NombreRepresentante='COBO CORONEL JORGE LUIS'
+
+update [BG_MasterData].[Empresas].BG_TB_Administradores_Representantes  set RUC_COMPANIA='9999999999999'  where RUC_COMPANIA='0190151700001' and IDENTIFICACION!='1900928993'
+update [BG_MasterData].[Empresas].BG_TB_Administradores_Representantes set RUC_COMPANIA='0190151700001' , IDENTIFICACION='1900928993' where IDENTIFICACION='0954121646' and NombreRepresentante='COBO CORONEL JORGE LUIS'
+SELECT * FROM [BG_MasterData].[Empresas].[BG_TB_Accionistas] order by FechaCarga desc
+SELECT * FROM [BG_MasterData].[Empresas].BG_TB_Gr_CIIU where CIIU6_DESC like '%nformáti%'
+SELECT * FROM [BG_MasterData].[Empresas].BG_TB_Directorio_Empresarial 
+SELECT * FROM [BG_MasterData].[Empresas].BG_TB_Empresa_Lider_Grupo_Economico 
+SELECT * FROM [BG_MasterData].[Empresas].BG_TB_Fact_Empresas where NUMERO_RUC='1718085929001'
+
+
+-----------------------------------------------------------------------------------------
+
+SELECT * FROM [BG_MasterData].[Empresas].BG_TB_Gr_CIIU where CIIU6_DESC IN ('G477396','G471101','G471101','G471101','I561002','G463012','G471101','G471101','G471900','G471101','G475201','G477111','G477111','G477111','I561001','G471101','I551009','G463095','G464996','I561001','G471101','G454002','G471101','G463031','G464124','I551009','I561003','G471101','G453000','G471101','G453000','G452001','G452001','G471101','S960200','G453000','G477111','S960907','G471900','G471900','I561001','G471900','S960907','S960200','H492101','G465995','I561002','I561001','G477111','S960907','G471101','G471900','G473002','G471101','I561003','S960907','S960907','S960907','I561001','G477121','G471101','I561001','I561002','I561002','Q862001','G464923','G477202','G464124','G464121','G471101','G475201','I561001','G463014','G463091','S960200','G471101','G477111','G477202','G471101','G452001','S960901','G477111','G477322','G466313','G471101','G463014','I561001','G471101','G469000','G471101','G475901','G471101','G479902','G471900','I561001','G477111','G477205','S960200','G477391','G477205')
+
+
+SELECT canton,* FROM [BG_MasterData].[Empresas].BG_TB_Fact_Empresas where NUMERO_RUC='0930482104001'
+SELECT canton,* FROM [BG_MasterData].[Empresas].BG_TB_Fact_Empresas where NUMERO_RUC='0954121646001'
+update  [BG_MasterData].[Empresas].BG_TB_Fact_Empresas set  CANTON='Guayaquil',PROVINCIA='Guayas' where NUMERO_RUC='0903603348001'

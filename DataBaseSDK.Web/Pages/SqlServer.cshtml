@@ -1,0 +1,11 @@
+@page
+@model SqlServerModel
+@{
+    ViewData["Title"] = "SQL Server";
+}
+
+<partial name="_QueryConsole" model="Model" />
+
+@section Scripts {
+    <partial name="_QueryScripts" />
+}

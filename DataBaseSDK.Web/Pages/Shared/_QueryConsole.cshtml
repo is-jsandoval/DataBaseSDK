@@ -1,0 +1,606 @@
+@using DataBaseSDK.Core
+@model QueryConsolePageModel
+
+@{
+    var isOracle = Model.Kind == DatabaseKind.Oracle;
+    var kind = isOracle ? "oracle" : "sqlserver";
+    var selected = Model.SelectedConnection;
+    var kindsJson = System.Text.Json.JsonSerializer.Serialize(Model.ObjectKinds);
+}
+
+@* Token para los fetch POST (guardar/probar/borrar conexiones y guardar archivos .sql). *@
+@Html.AntiForgeryToken()
+
+<div data-query-console data-kind="@kind" data-base-url="@Url.Page(null)" data-kinds="@kindsJson"
+     data-has-databases="@(Model.HasDatabases ? "1" : "0")" data-selected-alias="@Model.Alias"
+     data-selected-database="@Model.Database" data-selected-schema="@Model.Schema">
+
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+        <h4 class="mb-0">@(isOracle ? "🛢️" : "🗄️") @Model.Title</h4>
+        <div class="d-flex gap-2 flex-wrap">
+            <span class="badge bg-danger" data-role="write-badge" @(selected?.AllowWrite == true ? "" : "hidden")
+                  title="Esta conexión permite editar filas desde la grilla de resultados (con confirmación y bitácora). El editor de consultas sigue siendo de solo lectura.">
+                ✏️ Edición de filas habilitada
+            </span>
+            <span class="badge bg-secondary" title="En el editor se aceptan consultas SELECT / WITH. Cada ejecución corre en una transacción que siempre se revierte.">
+                🔒 Consultas de solo lectura · máx. @QueryOptions.HardMaxRows filas · @QueryOptions.DefaultTimeoutSeconds s
+            </span>
+        </div>
+    </div>
+
+    <div class="qc-layout" data-role="layout">
+
+        @* ---------- Panel izquierdo (Ctrl+B lo oculta / muestra; el divisor lo ensancha) ---------- *@
+        <aside class="qc-side" data-role="side">
+            <div class="card">
+                <div class="card-header p-1">
+                    <ul class="nav nav-pills nav-fill small">
+                        <li class="nav-item"><a class="nav-link py-0 active" href="#" data-pane-tab="objects">Objetos</a></li>
+                        <li class="nav-item"><a class="nav-link py-0" href="#" data-pane-tab="files">Archivos .sql</a></li>
+                    </ul>
+                </div>
+
+                <div class="card-body p-2" data-pane="objects">
+                    <div class="d-flex gap-1 mb-1">
+                        <button type="button" class="btn btn-primary btn-sm py-0" data-role="new-connection" title="Agregar una conexión">＋ Conexión</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="refresh" title="Recargar el árbol">⟳</button>
+                    </div>
+                    <input type="search" class="form-control form-control-sm mb-1" data-role="filter" placeholder="Buscar objeto por nombre (mín. 2 letras)...">
+                    @if (isOracle)
+                    {
+                        <label class="form-check small text-muted mb-1">
+                            <input type="checkbox" class="form-check-input" data-role="show-system"> Mostrar esquemas del sistema
+                        </label>
+                    }
+                    <div data-role="results" class="small qc-scroll" hidden></div>
+                    <div data-role="tree" class="small qc-scroll qc-tree"></div>
+                    <hr class="my-2">
+                    <div data-role="detail" class="small">
+                        <span class="text-muted">Elige un objeto para ver sus acciones y su definición.</span>
+                    </div>
+                </div>
+
+                <div class="card-body p-2" data-pane="files" hidden>
+                    <div class="d-flex gap-1 flex-wrap mb-2">
+                        <button type="button" class="btn btn-primary btn-sm py-0" data-role="open-file" title="Elegir un archivo .sql del disco (Ctrl+O)">📂 Abrir archivo...</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="open-folder" title="Mostrar una carpeta de scripts en este panel">📁 Agregar carpeta...</button>
+                    </div>
+                    <div class="small text-muted mb-1">Carpetas</div>
+                    <div data-role="roots" class="small qc-scroll qc-tree"></div>
+                    <hr class="my-2">
+                    <div class="small text-muted mb-1">Recientes</div>
+                    <div data-role="recent" class="small qc-scroll" style="max-height: 20vh;"></div>
+                </div>
+            </div>
+        </aside>
+
+        <div class="qc-splitter" data-role="splitter" title="Arrastra para cambiar el ancho (doble clic: ancho original) · Ctrl+B oculta o muestra el panel"></div>
+
+        @* ---------- Editor y resultados ---------- *@
+        <section class="qc-main">
+            <form method="post" asp-page-handler="Run" data-role="form">
+                <input type="hidden" name="Sql" data-role="sql-submit" value="@Model.Sql">
+
+                <div class="d-flex flex-wrap gap-2 align-items-end mb-2">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-role="toggle-side" title="Ocultar el panel izquierdo (Ctrl+B)">☰</button>
+                    <div>
+                        <label class="form-label small text-muted mb-0 d-block">Conexión</label>
+                        <select name="Alias" class="form-select form-select-sm" data-role="alias" style="min-width: 160px;">
+                            @foreach (var connection in Model.Connections)
+                            {
+                                <option value="@connection.Alias" selected="@(connection.Alias.Equals(Model.Alias, StringComparison.OrdinalIgnoreCase))">@connection.Alias</option>
+                            }
+                        </select>
+                    </div>
+                    @if (Model.HasDatabases)
+                    {
+                        <div>
+                            <label class="form-label small text-muted mb-0 d-block">Base de datos</label>
+                            <select name="Database" class="form-select form-select-sm" data-role="database" style="min-width: 160px;">
+                                <option value="">(predeterminada)</option>
+                                @if (!string.IsNullOrWhiteSpace(Model.Database))
+                                {
+                                    <option value="@Model.Database" selected>@Model.Database</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    else
+                    {
+                        <div>
+                            <label class="form-label small text-muted mb-0 d-block">Esquema</label>
+                            <select name="Schema" class="form-select form-select-sm" data-role="schema" style="min-width: 160px;">
+                                <option value="">(el del usuario)</option>
+                                @if (!string.IsNullOrWhiteSpace(Model.Schema))
+                                {
+                                    <option value="@Model.Schema" selected>@Model.Schema</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    <div>
+                        <label class="form-label small text-muted mb-0 d-block">Filas máx.</label>
+                        <select name="MaxRows" class="form-select form-select-sm">
+                            @foreach (var option in new[] { 50, 100, 500, 1000, 5000, 10000 })
+                            {
+                                <option value="@option" selected="@(option == Model.MaxRows)">@option</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="small text-muted flex-grow-1" data-role="description">@selected?.Description</div>
+                    <div>
+                        <select class="form-select form-select-sm" data-role="history" style="max-width: 220px;">
+                            <option value="">Historial...</option>
+                        </select>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-role="toggle-explorer" title="Mostrar el explorador de archivos (Ctrl+K)">🗂 Explorador</button>
+                </div>
+
+                @* Pestañas de archivos / consultas *@
+                <div class="qc-tabs" data-role="tabs"></div>
+
+                <div class="d-flex flex-wrap gap-1 align-items-center my-1">
+                    <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="btn-new" title="Nueva consulta sin guardar">＋ Nueva</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="btn-open" title="Abrir un archivo .sql (Ctrl+O)">📂 Abrir...</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="btn-save" title="Guardar (Ctrl+S)">💾 Guardar</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="btn-saveas" title="Guardar como... (Ctrl+Shift+S)">Guardar como...</button>
+                    <span class="small text-muted ms-2 text-truncate flex-grow-1" data-role="file-path" style="min-width: 0;"></span>
+                    <span class="small qc-legend" title="Barra a la izquierda de cada línea">
+                        <i class="qc-bar qc-bar-unsaved"></i> modificada sin guardar
+                        <i class="qc-bar qc-bar-saved ms-2"></i> guardada
+                    </span>
+                </div>
+
+                <div class="alert py-2 px-3 mb-2 small" data-role="file-banner" hidden></div>
+
+                <div class="qc-editor-host">
+                <div class="qc-editor-wrap">
+                    <canvas class="qc-gutter" data-role="gutter" width="58" height="10"></canvas>
+                    <textarea class="qc-editor" data-role="sql" wrap="off" spellcheck="false"
+                              placeholder="@(isOracle ? "SELECT * FROM dual" : "SELECT TOP 10 * FROM sys.tables")">@Model.Sql</textarea>
+                </div>
+                </div>
+                <div class="small text-muted qc-statusbar" data-role="statusbar"></div>
+
+                <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+                    <button type="submit" class="btn btn-primary btn-sm" data-role="run" title="Ejecuta lo seleccionado, o todo el texto si no hay selección">▶ Ejecutar <span class="opacity-75">(Ctrl+Enter)</span></button>
+                    <button type="submit" class="btn btn-outline-secondary btn-sm" asp-page-handler="Csv">⬇ Descargar CSV</button>
+                    <span class="small text-muted">Una sola sentencia que empiece con SELECT o WITH. Con texto seleccionado se ejecuta solo la selección. Ctrl+Espacio sugiere tablas y columnas; Ctrl+K muestra el explorador de archivos; Ctrl+Tab cambia al archivo anterior; arrastra un archivo .sql aquí para abrirlo.</span>
+                </div>
+            </form>
+
+            @if (Model.Error != null)
+            {
+                <div class="alert @(Model.Rejected ? "alert-warning" : "alert-danger") mt-3 mb-0" style="white-space: pre-wrap;">@(Model.Rejected ? "🔒 " : "")@Model.Error</div>
+            }
+
+            @if (Model.Result != null)
+            {
+                var result = Model.Result;
+
+                // Edición en la grilla: el servidor ya decidió qué tabla/columnas se pueden editar (EditInfo); el navegador
+                // solo recibe ese resumen y la conexión con la que se consultó (el selector puede cambiar después).
+                var edit = Model.Edit is { Editable: true } ? Model.Edit : null;
+                var editJson = edit == null
+                    ? null
+                    : System.Text.Json.JsonSerializer.Serialize(
+                        new { alias = Model.Alias, database = edit.Database, schema = edit.Schema, table = edit.Table, primaryKey = edit.PrimaryKey, columns = edit.Columns },
+                        new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+                <div class="d-flex justify-content-between align-items-center mt-3 mb-1 small text-muted">
+                    <span>
+                        <strong>@result.Rows.Count</strong> fila(s) · @result.Columns.Count columna(s) · @result.ElapsedMilliseconds ms
+                        @if (edit != null)
+                        {
+                            <span class="badge bg-danger ms-1" title="Tabla @(edit.Schema + "." + edit.Table) · clave primaria: @string.Join(", ", edit.PrimaryKey)">✏️ editable · @edit.Table</span>
+                        }
+                    </span>
+                    @if (result.Truncated)
+                    {
+                        <span class="text-warning">⚠ Resultado cortado en @Model.MaxRows filas — sube el límite o filtra la consulta.</span>
+                    }
+                </div>
+
+                @if (edit != null)
+                {
+                    <div class="small text-muted mb-1" data-role="edit-help">
+                        Doble clic en una celda para editarla. Los cambios no se guardan hasta que los revises y confirmes.
+                    </div>
+                    <div class="qc-edit-bar" data-role="edit-bar" hidden>
+                        <span data-role="edit-count"></span>
+                        <button type="button" class="btn btn-danger btn-sm py-0" data-role="edit-review">Revisar y confirmar…</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="edit-discard">Descartar cambios</button>
+                    </div>
+                }
+                else if (Model.Edit != null && !string.IsNullOrWhiteSpace(Model.Edit.Reason))
+                {
+                    <div class="small text-muted mb-1" title="Solo se editan SELECT simples de una tabla, con su clave primaria">🔒 Solo lectura: @Model.Edit.Reason</div>
+                }
+                else if (Model.EditHint != null)
+                {
+                    <div class="small text-muted mb-1">🔒 @Model.EditHint</div>
+                }
+
+                <div class="qc-results" data-role="results-grid" data-edit="@editJson">
+                    <table class="table table-sm table-hover mb-0 small">
+                        <thead>
+                            <tr>
+                                <th class="text-muted">#</th>
+                                @for (var c = 0; c < result.Columns.Count; c++)
+                                {
+                                    var column = result.Columns[c];
+                                    var editColumn = edit?.Columns[c];
+
+                                    <th class="@(column.IsNumeric ? "text-end" : "")"
+                                        title="@column.TypeName@(editColumn is { Editable: false, Reason: not null } ? " · no editable: " + editColumn.Reason : "")">@column.Name@(editColumn is { Editable: true } ? " ✏️" : "")</th>
+                                }
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (var r = 0; r < result.Rows.Count; r++)
+                            {
+                                var row = result.Rows[r];
+
+                                <tr>
+                                    <td class="text-muted">@(r + 1)</td>
+                                    @for (var c = 0; c < row.Length; c++)
+                                    {
+                                        var text = CellText.Format(row[c]);
+
+                                        if (text == null)
+                                        {
+                                            <td class="qc-null text-muted fst-italic">(null)</td>
+                                        }
+                                        else
+                                        {
+                                            <td class="qc-cell @(result.Columns[c].IsNumeric ? "text-end" : "")" title="@text">@text</td>
+                                        }
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    @if (result.Rows.Count == 0)
+                    {
+                        <div class="text-muted p-3">La consulta no devolvió filas.</div>
+                    }
+                </div>
+            }
+        </section>
+
+        @* ---------- Explorador de archivos (derecha, como el de VS Code): una carpeta abierta como árbol. Ctrl+K lo muestra / oculta. ---------- *@
+        <div class="qc-xsplitter" data-role="x-splitter" title="Arrastra para cambiar el ancho (doble clic: ancho original) · Ctrl+K oculta o muestra el explorador"></div>
+        <aside class="qc-explorer" data-role="explorer" aria-label="Explorador de archivos">
+            <div class="qx-head">
+                <span class="qx-title">Explorador</span>
+                <span class="qx-actions">
+                    <button type="button" data-role="x-open" title="Abrir carpeta...">📂</button>
+                    <button type="button" data-role="x-refresh" title="Actualizar">⟳</button>
+                    <button type="button" data-role="x-collapse" title="Contraer todas las carpetas">⊟</button>
+                    <button type="button" data-role="x-hide" title="Ocultar el explorador (Ctrl+K)">»</button>
+                </span>
+            </div>
+            <div class="qx-folder" data-role="x-folder" hidden>
+                <span class="qx-folder-name" data-role="x-folder-name"></span>
+                <button type="button" class="qx-folder-close" data-role="x-close-folder" title="Cerrar carpeta (no borra nada)">✕</button>
+            </div>
+            <div class="qx-body" data-role="x-body" tabindex="0" role="tree"></div>
+        </aside>
+    </div>
+
+    @* Diálogo "Nueva conexión" / "Editar conexión" — mismos campos que SSMS / SQL Developer. *@
+    <div class="modal fade" tabindex="-1" data-role="modal">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" data-role="modal-title">Nueva conexión @Model.Title</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-2">
+                        <div class="col-12">
+                            <label class="form-label small mb-0">Nombre de la conexión</label>
+                            <input type="text" class="form-control form-control-sm" data-field="alias" maxlength="40" placeholder="ej. DEV, Produccion-lectura">
+                        </div>
+
+                        @if (isOracle)
+                        {
+                            <div class="col-12">
+                                <label class="form-label small mb-0">Cómo conectar</label>
+                                <select class="form-select form-select-sm" data-field="oracleMode">
+                                    <option value="ServiceName">Servidor + nombre de servicio</option>
+                                    <option value="Sid">Servidor + SID</option>
+                                    <option value="Tns">Alias de tnsnames.ora</option>
+                                </select>
+                            </div>
+                        }
+
+                        <div class="col-8" data-group="host">
+                            <label class="form-label small mb-0">Servidor</label>
+                            <input type="text" class="form-control form-control-sm" data-field="host" placeholder="@(isOracle ? "host o IP del listener" : "servidor o servidor\\instancia")">
+                        </div>
+                        <div class="col-4" data-group="host">
+                            <label class="form-label small mb-0">Puerto</label>
+                            <input type="number" class="form-control form-control-sm" data-field="port" min="1" max="65535" placeholder="@(isOracle ? "1521" : "1433")">
+                        </div>
+
+                        @if (isOracle)
+                        {
+                            <div class="col-12">
+                                <label class="form-label small mb-0" data-role="oracle-target-label">Nombre del servicio</label>
+                                <input type="text" class="form-control form-control-sm" data-field="oracleTarget">
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="col-12">
+                                <label class="form-label small mb-0">Base de datos inicial (opcional)</label>
+                                <input type="text" class="form-control form-control-sm" data-field="database">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small mb-0">Autenticación</label>
+                                <select class="form-select form-select-sm" data-field="auth">
+                                    <option value="sql">Usuario y contraseña de SQL Server</option>
+                                    <option value="windows">Autenticación de Windows</option>
+                                </select>
+                            </div>
+                        }
+
+                        <div class="col-6" data-group="credentials">
+                            <label class="form-label small mb-0">Usuario</label>
+                            <input type="text" class="form-control form-control-sm" data-field="user" autocomplete="off">
+                        </div>
+                        <div class="col-6" data-group="credentials">
+                            <label class="form-label small mb-0">Contraseña</label>
+                            <input type="password" class="form-control form-control-sm" data-field="password" autocomplete="new-password">
+                            <div class="form-text" data-role="password-hint" hidden>Vacía = conservar la guardada.</div>
+                        </div>
+
+                        @if (!isOracle)
+                        {
+                            <div class="col-12">
+                                <label class="form-check small">
+                                    <input type="checkbox" class="form-check-input" data-field="trust" checked> Confiar en el certificado del servidor
+                                </label>
+                            </div>
+                        }
+
+                        <div class="col-12">
+                            <label class="form-check small">
+                                <input type="checkbox" class="form-check-input" data-field="allowWrite"> Permitir editar datos desde la grilla de resultados
+                            </label>
+                            <div class="form-text">
+                                Apagado por defecto. El editor de consultas sigue siendo de solo lectura: solo se podrán cambiar celdas de la grilla
+                                (UPDATE por clave primaria, con vista previa, confirmación y bitácora en <code>.local\data-edits.log</code>).
+                                Necesita un usuario con permiso de escritura; no lo actives en producción.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="small text-muted mt-2">
+                        La conexión se guarda en la carpeta del proyecto (<code>.local\db-connections.json</code>) con la contraseña cifrada con tu usuario de Windows; nunca se muestra. Usa un usuario de solo lectura salvo que actives la edición de datos.
+                    </div>
+                    <div class="alert mt-2 mb-0 py-2 small" data-role="modal-msg" hidden style="white-space: pre-wrap;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm me-auto" data-role="modal-test">Probar conexión</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary btn-sm" data-role="modal-save">Guardar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* Diálogo de confirmación de cambios de la grilla: antes → después de cada celda, prueba en seco y guardado. *@
+    <div class="modal fade" tabindex="-1" data-role="edit-modal" data-bs-backdrop="static">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Confirmar cambios en <span data-role="edit-modal-table"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="small mb-2">
+                        Conexión <strong data-role="edit-modal-alias"></strong>. Cada fila se identifica por su clave primaria; si alguien la cambió desde que
+                        consultaste, no se pisa y no se guarda nada. Todo se aplica en una sola transacción.
+                    </div>
+                    <div class="qc-edit-diff" data-role="edit-modal-diff"></div>
+                    <div class="alert mt-2 mb-0 py-2 small" data-role="edit-modal-msg" hidden style="white-space: pre-wrap;"></div>
+                </div>
+                <div class="modal-footer">
+                    <label class="form-check small me-auto mb-0">
+                        <input type="checkbox" class="form-check-input" data-role="edit-modal-ack">
+                        Entiendo que esto modifica datos reales de <strong data-role="edit-modal-alias2"></strong>
+                    </label>
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-outline-primary btn-sm" data-role="edit-modal-test" title="Hace todo (incluida la verificación de las filas) y revierte: no guarda nada">Probar (no guarda)</button>
+                    <button type="button" class="btn btn-danger btn-sm" data-role="edit-modal-apply" disabled>Confirmar y guardar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* Diálogo selector de rutas: explorador de carpetas del disco local (abrir archivo / elegir carpeta / guardar como). *@
+    <div class="modal fade" tabindex="-1" data-role="picker">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" data-role="picker-title">Abrir archivo .sql</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="d-flex gap-1 flex-wrap mb-2" data-role="picker-places"></div>
+                    <div class="input-group input-group-sm mb-2">
+                        <input type="text" class="form-control" data-role="picker-path" placeholder="Escribe o pega una ruta, ej. C:\scripts" spellcheck="false">
+                        <button type="button" class="btn btn-outline-secondary" data-role="picker-go">Ir</button>
+                    </div>
+                    <div class="alert alert-danger py-2 small" data-role="picker-msg" hidden></div>
+                    <div class="qc-pick-list" data-role="picker-list"></div>
+                    <div class="mt-2" data-role="picker-name-row" hidden>
+                        <label class="form-label small mb-0">Nombre del archivo</label>
+                        <input type="text" class="form-control form-control-sm" data-role="picker-name" placeholder="consulta.sql" spellcheck="false">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary btn-sm" data-role="picker-ok" disabled>Abrir</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Layout: panel izquierdo | divisor | editor | divisor | explorador (derecha). Ctrl+B pone .qc-side-hidden y Ctrl+K .qc-explorer-open. */
+    .qc-layout { display: grid; grid-template-columns: var(--qc-side-w, 380px) 6px minmax(0, 1fr); gap: 0 10px; align-items: start; }
+    .qc-layout.qc-explorer-open { grid-template-columns: var(--qc-side-w, 380px) 6px minmax(0, 1fr) 6px var(--qc-explorer-w, 300px); }
+    .qc-layout.qc-side-hidden { grid-template-columns: minmax(0, 1fr); }
+    .qc-layout.qc-side-hidden.qc-explorer-open { grid-template-columns: minmax(0, 1fr) 6px var(--qc-explorer-w, 300px); }
+    .qc-layout.qc-side-hidden .qc-side, .qc-layout.qc-side-hidden .qc-splitter { display: none; }
+    .qc-side, .qc-main { min-width: 0; }
+    .qc-splitter, .qc-xsplitter { align-self: stretch; min-height: 200px; cursor: col-resize; background: var(--db-border, #3c3c3c); border-radius: 3px; opacity: .6; }
+    .qc-splitter:hover, .qc-xsplitter:hover { opacity: 1; }
+    .qc-explorer, .qc-xsplitter { display: none; }
+    .qc-layout.qc-explorer-open .qc-xsplitter { display: block; }
+    .qc-layout.qc-explorer-open .qc-explorer { display: flex; }
+    @@media (max-width: 991px) {
+        .qc-layout, .qc-layout.qc-explorer-open { display: block; }
+        .qc-splitter, .qc-xsplitter, .qc-layout.qc-explorer-open .qc-xsplitter { display: none; }
+        .qc-explorer { margin-top: 12px; max-height: 50vh; }
+        .qc-side { margin-bottom: 12px; }
+    }
+
+    /* Autocompletado (ventanita bajo el cursor) */
+    .qc-editor-host { position: relative; }
+    .qc-complete { position: absolute; z-index: 30; min-width: 280px; max-width: 560px; max-height: 240px; overflow-y: auto;
+        background: var(--db-surface, #252526); color: var(--db-text, #e1e1e1); border: 1px solid var(--db-border, #3c3c3c);
+        border-radius: .375rem; box-shadow: 0 6px 18px rgba(0,0,0,.45); font-size: .85rem; }
+    .qc-complete[hidden] { display: none; }
+    .qc-complete-item { display: flex; align-items: baseline; gap: 6px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+    .qc-complete-active { background: rgba(13,110,253,.35); }
+    .qc-complete-icon { flex: 0 0 18px; text-align: center; color: #8ab4f8; }
+    .qc-complete-label { flex: 0 0 auto; font-family: Consolas, "Courier New", monospace; }
+    .qc-complete-label b { color: #4fc1ff; }
+    .qc-complete-detail { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--db-text-muted, #9d9d9d); font-size: .8em; text-align: right; }
+    .qc-complete-more { padding: 3px 8px; color: var(--db-text-muted, #9d9d9d); font-size: .8em; border-top: 1px solid var(--db-border, #3c3c3c); }
+
+    /* Arrastrar un .sql a la página */
+    .qc-drop-overlay { position: fixed; inset: 0; z-index: 3000; display: flex; align-items: center; justify-content: center; pointer-events: none;
+        background: rgba(13,110,253,.18); border: 4px dashed #4fc1ff; color: #fff; font-size: 1.6rem; font-weight: 600; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+    .qc-drop-overlay[hidden] { display: none; }
+
+    /* Editor con gutter */
+    .qc-editor-wrap { display: flex; border: 1px solid var(--db-border, #3c3c3c); border-radius: .375rem; overflow: hidden; background: var(--db-surface-2, #2d2d30); }
+    .qc-gutter { flex: 0 0 58px; background: var(--db-surface, #252526); border-right: 1px solid var(--db-border, #3c3c3c); display: block; }
+    .qc-editor { flex: 1 1 auto; min-width: 0; height: 280px; min-height: 120px; resize: vertical; border: 0; outline: 0; margin: 0; padding: 6px 8px;
+        font-family: Consolas, "Courier New", monospace; font-size: 13px; line-height: 20px; white-space: pre; overflow: auto; tab-size: 4;
+        background: transparent; color: var(--db-text, #e1e1e1); }
+    .qc-statusbar { padding: 2px 4px; }
+    .qc-bar { display: inline-block; width: 3px; height: 12px; vertical-align: -1px; margin-right: 3px; border-radius: 1px; }
+    .qc-bar-unsaved { background: #e2a03f; }
+    .qc-bar-saved { background: #4cc38a; }
+    .qc-legend { white-space: nowrap; color: var(--db-text-muted, #9d9d9d); }
+
+    /* Pestañas */
+    .qc-tabs { display: flex; flex-wrap: wrap; gap: 2px; align-items: flex-end; border-bottom: 1px solid var(--db-border, #3c3c3c); }
+    .qc-tab { display: flex; align-items: center; gap: 6px; padding: 3px 8px; max-width: 220px; cursor: pointer; font-size: .85rem;
+        border: 1px solid var(--db-border, #3c3c3c); border-bottom: 0; border-radius: .375rem .375rem 0 0; background: var(--db-surface, #252526); color: var(--db-text-muted, #9d9d9d); }
+    .qc-tab:hover { color: var(--db-text, #e1e1e1); }
+    .qc-tab-active { background: var(--db-surface-2, #2d2d30); color: var(--db-text, #e1e1e1); border-top: 2px solid #4fc1ff; }
+    .qc-tab-missing .qc-tab-title { color: #e2a03f; text-decoration: line-through; }
+    .qc-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .qc-tab-dirty { color: #e2a03f; }
+    .qc-tab-close, .qc-tab-add { color: inherit; text-decoration: none; opacity: .6; }
+    .qc-tab-close:hover, .qc-tab-add:hover { opacity: 1; }
+    .qc-tab-add { padding: 3px 8px; }
+
+    /* Explorador de archivos (derecha): una carpeta abierta como árbol, al estilo del de VS Code */
+    .qc-explorer { flex-direction: column; position: sticky; top: .5rem; min-width: 0; min-height: 260px; max-height: calc(100vh - 110px);
+        background: var(--db-surface, #252526); border: 1px solid var(--db-border, #3c3c3c); border-radius: .375rem; overflow: hidden; }
+    .qx-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 4px 10px; border-bottom: 1px solid var(--db-border, #3c3c3c); }
+    .qx-title { font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--db-text-muted, #9d9d9d); font-weight: 600; }
+    .qx-actions { display: flex; gap: 2px; }
+    .qx-actions button, .qx-folder-close { border: 0; background: transparent; color: var(--db-text-muted, #9d9d9d); padding: 0 5px; line-height: 1.6; border-radius: 3px; cursor: pointer; }
+    .qx-actions button:hover, .qx-folder-close:hover { background: rgba(127,127,127,.25); color: var(--db-text, #e1e1e1); }
+    .qx-folder { display: flex; align-items: center; justify-content: space-between; padding: 3px 6px 3px 10px; background: var(--db-surface-2, #2d2d30); font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+    .qx-folder[hidden] { display: none; }
+    .qx-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .qx-body { flex: 1 1 auto; overflow: auto; padding: 2px 0 8px; font-size: .85rem; outline: none; }
+    .qx-body:focus-visible { box-shadow: inset 0 0 0 1px var(--db-link, #4fc1ff); }
+    .qx-row { display: flex; align-items: center; gap: 4px; padding-right: 8px; height: 22px; cursor: pointer; white-space: nowrap; border-left: 2px solid transparent; }
+    .qx-row:hover { background: rgba(127,127,127,.2); }
+    .qx-row.qx-selected { background: rgba(13,110,253,.28); }
+    .qx-row.qx-active { background: rgba(79,193,255,.16); border-left-color: var(--db-link, #4fc1ff); }
+    .qx-row.qx-active.qx-selected { background: rgba(13,110,253,.4); }
+    .qx-twisty { flex: 0 0 12px; text-align: center; color: var(--db-text-muted, #9d9d9d); font-size: .7rem; }
+    .qx-icon { flex: 0 0 auto; }
+    .qx-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .qx-file-row.qx-opened .qx-label { color: var(--db-link, #4fc1ff); }
+    .qx-dot { flex: 0 0 auto; color: #e2a03f; font-size: .7rem; }
+    .qx-hint { padding: 3px 10px; color: var(--db-text-muted, #9d9d9d); font-size: .8rem; white-space: normal; }
+    .qx-empty { padding: 10px; }
+    .qx-empty .qx-recent { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--db-text, #e1e1e1); padding: 2px 4px; border-radius: 3px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .qx-empty .qx-recent:hover { background: rgba(127,127,127,.25); }
+    .qx-empty .qx-recent small { color: var(--db-text-muted, #9d9d9d); margin-left: 6px; }
+
+    /* Ctrl+Tab: lista "Archivos activos" en orden de uso reciente (aparece si se mantiene Ctrl un instante) */
+    .qc-switcher { position: fixed; z-index: 2600; top: 20%; left: 50%; transform: translateX(-50%); min-width: 340px; max-width: min(620px, 92vw);
+        background: var(--db-surface, #252526); color: var(--db-text, #e1e1e1); border: 1px solid var(--db-border, #3c3c3c);
+        border-radius: .5rem; box-shadow: 0 12px 34px rgba(0,0,0,.65); font-size: .9rem; }
+    .qc-switcher-title { padding: 6px 12px; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 600;
+        color: var(--db-text-muted, #9d9d9d); border-bottom: 1px solid var(--db-border, #3c3c3c); }
+    .qc-switcher-list { max-height: 50vh; overflow: auto; padding: 4px; }
+    .qc-switcher-row { display: flex; align-items: baseline; gap: 12px; padding: 4px 10px; border-radius: 4px; white-space: nowrap; cursor: pointer; }
+    .qc-switcher-row:hover { background: rgba(127,127,127,.2); }
+    .qc-switcher-row.qc-switcher-selected { background: rgba(13,110,253,.5); }
+    .qc-switcher-name { flex: 0 0 auto; font-weight: 600; }
+    .qc-switcher-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--db-text-muted, #9d9d9d); font-size: .8em; }
+    .qc-switcher-hint { padding: 4px 12px; font-size: .72rem; color: var(--db-text-muted, #9d9d9d); border-top: 1px solid var(--db-border, #3c3c3c); }
+
+    /* Selector de rutas */
+    .qc-pick-list { max-height: 45vh; overflow: auto; border: 1px solid var(--db-border, #3c3c3c); border-radius: .375rem; }
+    .qc-pick-row { padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+    .qc-pick-row:hover { background: rgba(127,127,127,.2); }
+    .qc-pick-selected { background: rgba(13,110,253,.3); }
+
+    /* Grilla de resultados */
+    .qc-scroll { overflow: auto; }
+    .qc-tree { max-height: 46vh; }
+    .qc-results { overflow: auto; max-height: 60vh; border: 1px solid var(--bs-border-color, #dee2e6); border-radius: .375rem; }
+    /* Cabecera fija: con las variables del tema del sitio (Bootstrap 5.1 no trae tema oscuro, así que --bs-body-bg quedaba blanco sobre blanco). */
+    .qc-results thead th { position: sticky; top: 0; z-index: 1; white-space: nowrap;
+        background: var(--db-surface-2, #2d2d30); color: var(--db-text, #e1e1e1); border-bottom: 1px solid var(--db-border, #3c3c3c); }
+    .qc-results tbody tr:nth-child(even) > td { background-color: rgba(127,127,127,.12); }
+    .qc-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Edición en la grilla */
+    .qc-edit-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; margin-bottom: 4px; border-radius: .375rem;
+        background: rgba(220,53,69,.18); border: 1px solid rgba(220,53,69,.6); font-size: .85rem; }
+    .qc-results td.qc-editable { cursor: cell; }
+    .qc-results td.qc-editable:hover { outline: 1px dashed rgba(79,193,255,.8); outline-offset: -1px; }
+    .qc-results td.qc-changed { background-color: rgba(226,160,63,.35) !important; box-shadow: inset 3px 0 0 #e2a03f; }
+    .qc-results td.qc-saved { background-color: rgba(76,195,138,.35) !important; box-shadow: inset 3px 0 0 #4cc38a; }
+    .qc-results td.qc-editing { padding: 0; max-width: none; overflow: visible; }
+    .qc-cell-editor { display: flex; gap: 2px; align-items: center; min-width: 160px; }
+    .qc-cell-editor input { flex: 1 1 auto; min-width: 0; font-size: inherit; padding: 1px 4px; border: 1px solid #4fc1ff; border-radius: 2px;
+        background: var(--db-surface, #252526); color: var(--db-text, #e1e1e1); }
+    .qc-cell-editor button { font-size: .75rem; padding: 0 5px; line-height: 1.5; }
+    .qc-edit-diff table { width: 100%; font-size: .85rem; }
+    .qc-edit-diff th { color: var(--db-text-muted, #9d9d9d); font-weight: 600; }
+    .qc-edit-diff td, .qc-edit-diff th { padding: 2px 6px; vertical-align: top; }
+    .qc-edit-diff .qc-from { color: #f28b82; text-decoration: line-through; word-break: break-all; }
+    .qc-edit-diff .qc-to { color: #81c995; word-break: break-all; }
+    .qc-edit-diff .qc-diff-key { color: var(--db-text-muted, #9d9d9d); }
+
+    /* Árbol */
+    .qc-row { display: flex; align-items: center; gap: 4px; padding: 1px 2px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+    .qc-row:hover { background: rgba(127,127,127,.2); }
+    .qc-row.qc-selected { background: rgba(13,110,253,.25); }
+    .qc-caret { display: inline-block; width: 12px; text-align: center; color: #888; flex: 0 0 12px; }
+    .qc-label { flex: 0 1 auto; min-width: 40px; overflow: hidden; text-overflow: ellipsis; }
+    .qc-detail { flex: 1 1 0; min-width: 0; color: #888; font-size: .85em; overflow: hidden; text-overflow: ellipsis; }
+    .qc-actions { margin-left: auto; display: none; gap: 4px; }
+    .qc-row:hover .qc-actions { display: inline-flex; }
+    .qc-children { margin-left: 12px; padding-left: 4px; border-left: 1px dotted rgba(127,127,127,.4); }
+    .qc-definition { max-height: 30vh; overflow: auto; white-space: pre; font-family: Consolas, "Courier New", monospace; font-size: .8rem; }
+</style>

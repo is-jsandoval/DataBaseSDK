@@ -1,0 +1,5 @@
+--172.26.60.58,4433
+--
+--BGGODS
+
+select * from CLTEFIL_DIARIO where CLCDID='0903858967'

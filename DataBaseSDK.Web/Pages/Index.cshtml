@@ -1,0 +1,39 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Inicio";
+}
+
+<h1 class="mb-1">DataBaseSDK</h1>
+<p class="text-muted">Consultas a bases de datos desde esta máquina, como SQL Server Management Studio o SQL Developer: explorador de objetos, editor con archivos <code>.sql</code>, autocompletado y resultados que se pueden editar celda por celda (opcional, por conexión).</p>
+
+<div class="row row-cols-1 row-cols-md-2 g-3" style="max-width: 900px;">
+    @foreach (var module in Model.Modules)
+    {
+        <div class="col">
+            <a asp-page="@module.Page" class="text-decoration-none">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body">
+                        <h5 class="card-title">@module.Icon @module.Title</h5>
+                        <p class="card-text text-muted small mb-2">
+                            @(module.Connections == 0 ? "Sin conexiones todavía" : module.Connections + " conexión(es)")
+                        </p>
+                        @if (module.WriteEnabled > 0)
+                        {
+                            <span class="badge bg-danger" title="Conexiones que permiten editar filas desde la grilla de resultados">✏️ @module.WriteEnabled con edición de filas</span>
+                        }
+                    </div>
+                </div>
+            </a>
+        </div>
+    }
+</div>
+
+@if (Model.TotalConnections == 0)
+{
+    <div class="alert alert-info mt-4" style="max-width: 900px;">
+        <strong>Primeros pasos:</strong> abre un módulo y usa <em>＋ Conexión</em> en el explorador (se guarda en
+        <code>.local\db-connections.json</code> con la contraseña cifrada con tu usuario de Windows), o define
+        <code>SQLSERVER_CONN_&lt;ALIAS&gt;</code> / <code>ORACLE_CONN_&lt;ALIAS&gt;</code> en el <code>.env</code>.
+    </div>
+}
