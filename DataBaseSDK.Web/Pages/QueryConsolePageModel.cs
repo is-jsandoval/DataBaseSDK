@@ -232,6 +232,20 @@ public abstract class QueryConsolePageModel : PageModel
 
     public async Task<IActionResult> OnPostRunAsync(CancellationToken cancellationToken)
     {
+        await RunAsync(cancellationToken);
+        return Page();
+    }
+
+    // Lo que usa el editor: la misma ejecución, pero devuelve SOLO el bloque de resultados (_QueryResults) para no recargar
+    // la página entera (árbol, pestañas, scripts). Cancelar el fetch corta la consulta: el token es el de la petición.
+    public async Task<IActionResult> OnPostRunPartialAsync(CancellationToken cancellationToken)
+    {
+        await RunAsync(cancellationToken);
+        return Partial("_QueryResults", this);
+    }
+
+    private async Task RunAsync(CancellationToken cancellationToken)
+    {
         if (SelectedConnection != null)
             _workspace.SaveContext(Kind, Alias, Database, Schema);
 
@@ -239,8 +253,6 @@ public abstract class QueryConsolePageModel : PageModel
 
         if (Result != null)
             Edit = await PrepareEditAsync(Result, cancellationToken);
-
-        return Page();
     }
 
     public async Task<IActionResult> OnPostCsvAsync(CancellationToken cancellationToken)

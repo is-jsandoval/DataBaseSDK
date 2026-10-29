@@ -1,0 +1,103 @@
+@using DataBaseSDK.Core
+@model QueryConsolePageModel
+@* El resultado (o el error) de una ejecución. Lo usa la página al cargar (dentro de results-area) y el handler RunPartial,
+   que devuelve SOLO esto para que ejecutar no recargue la página entera (query-results.js lo pone en la pestaña que ejecutó). *@
+@if (Model.Error != null)
+{
+    <div class="alert @(Model.Rejected ? "alert-warning" : "alert-danger") mt-2 mb-0" style="white-space: pre-wrap;">@(Model.Rejected ? "🔒 " : "")@Model.Error</div>
+}
+
+@if (Model.Result != null)
+{
+    var result = Model.Result;
+
+    // Edición en la grilla: el servidor ya decidió qué tabla/columnas se pueden editar (EditInfo); el navegador
+    // solo recibe ese resumen y la conexión con la que se consultó (el selector puede cambiar después).
+    var edit = Model.Edit is { Editable: true } ? Model.Edit : null;
+    var editJson = edit == null
+        ? null
+        : System.Text.Json.JsonSerializer.Serialize(
+            new { alias = Model.Alias, database = edit.Database, schema = edit.Schema, table = edit.Table, primaryKey = edit.PrimaryKey, columns = edit.Columns },
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+    <div class="d-flex justify-content-between align-items-center mt-2 mb-1 small text-muted">
+        <span>
+            <strong>@result.Rows.Count</strong> fila(s) · @result.Columns.Count columna(s) · @result.ElapsedMilliseconds ms
+            @* Está fuera del formulario (los resultados van debajo del editor): form= lo asocia igual, con el Sql y la conexión de la pestaña. *@
+            · <button type="submit" form="qc-run-form" asp-page-handler="Csv" class="btn btn-link btn-sm p-0 align-baseline small" title="Vuelve a ejecutar la consulta y descarga el resultado como CSV">⬇ CSV</button>
+            @if (edit != null)
+            {
+                <span class="badge bg-danger ms-1" title="Tabla @(edit.Schema + "." + edit.Table) · clave primaria: @string.Join(", ", edit.PrimaryKey)">✏️ editable · @edit.Table</span>
+            }
+        </span>
+        @if (result.Truncated)
+        {
+            <span class="text-warning">⚠ Resultado cortado en @Model.MaxRows filas — sube el límite o filtra la consulta.</span>
+        }
+    </div>
+
+    @if (edit != null)
+    {
+        <div class="small text-muted mb-1" data-role="edit-help">
+            Doble clic en una celda para editarla. Los cambios no se guardan hasta que los revises y confirmes.
+        </div>
+        <div class="qc-edit-bar" data-role="edit-bar" hidden>
+            <span data-role="edit-count"></span>
+            <button type="button" class="btn btn-danger btn-sm py-0" data-role="edit-review">Revisar y confirmar…</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="edit-discard">Descartar cambios</button>
+        </div>
+    }
+    else if (Model.Edit != null && !string.IsNullOrWhiteSpace(Model.Edit.Reason))
+    {
+        <div class="small text-muted mb-1" title="Solo se editan SELECT simples de una tabla, con su clave primaria">🔒 Solo lectura: @Model.Edit.Reason</div>
+    }
+    else if (Model.EditHint != null)
+    {
+        <div class="small text-muted mb-1">🔒 @Model.EditHint</div>
+    }
+
+    <div class="qc-results" data-role="results-grid" data-edit="@editJson">
+        <table class="table table-sm table-hover mb-0 small">
+            <thead>
+                <tr>
+                    <th class="text-muted">#</th>
+                    @for (var c = 0; c < result.Columns.Count; c++)
+                    {
+                        var column = result.Columns[c];
+                        var editColumn = edit?.Columns[c];
+
+                        <th class="@(column.IsNumeric ? "text-end" : "")"
+                            title="@column.TypeName@(editColumn is { Editable: false, Reason: not null } ? " · no editable: " + editColumn.Reason : "")">@column.Name@(editColumn is { Editable: true } ? " ✏️" : "")</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @for (var r = 0; r < result.Rows.Count; r++)
+                {
+                    var row = result.Rows[r];
+
+                    <tr>
+                        <td class="text-muted">@(r + 1)</td>
+                        @for (var c = 0; c < row.Length; c++)
+                        {
+                            var text = CellText.Format(row[c]);
+
+                            if (text == null)
+                            {
+                                <td class="qc-null text-muted fst-italic">(null)</td>
+                            }
+                            else
+                            {
+                                <td class="qc-cell @(result.Columns[c].IsNumeric ? "text-end" : "")" title="@text">@text</td>
+                            }
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (result.Rows.Count == 0)
+        {
+            <div class="text-muted p-3">La consulta no devolvió filas.</div>
+        }
+    </div>
+}

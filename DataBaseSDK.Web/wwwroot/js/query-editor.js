@@ -957,6 +957,8 @@
         if (key === 'b' && !event.shiftKey) { event.preventDefault(); toggleSide(); }
         else if (key === 's') { event.preventDefault(); save(active(), event.shiftKey); }
         else if (key === 'o' && !event.shiftKey) { event.preventDefault(); openDialog(); }
+        // Ctrl+E ejecuta como en SSMS (el navegador lo usaría para la barra de búsqueda: se le gana con preventDefault).
+        else if (key === 'e' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(runButton); }
     });
 
     textarea.addEventListener('keydown', function (event) {
