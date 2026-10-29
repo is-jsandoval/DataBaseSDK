@@ -68,6 +68,22 @@ public class SaveFileBody
     public bool Overwrite { get; set; }
 }
 
+/// <summary>Lo que el navegador manda para recordar: o la conexión elegida (<see cref="Context"/>) o las pestañas abiertas.</summary>
+public class WorkspaceBody
+{
+    public bool Context { get; set; }
+
+    public string? Alias { get; set; }
+
+    public string? Database { get; set; }
+
+    public string? Schema { get; set; }
+
+    public List<WorkspaceFile?>? Files { get; set; }
+
+    public string? ActiveFile { get; set; }
+}
+
 public class AliasBody
 {
     public string Alias { get; set; } = string.Empty;
@@ -94,6 +110,7 @@ public abstract class QueryConsolePageModel : PageModel
     private readonly IDbExplorer _explorer;
     private readonly IRowEditor _editor;
     private readonly ISqlFileService _files;
+    private readonly IWorkspaceStore _workspace;
 
     protected QueryConsolePageModel(
         IDbConnectionCatalog catalog,
@@ -102,11 +119,13 @@ public abstract class QueryConsolePageModel : PageModel
         IEnumerable<IDbExplorer> explorers,
         IEnumerable<IRowEditor> editors,
         ISqlFileService files,
+        IWorkspaceStore workspace,
         DatabaseKind kind)
     {
         _catalog = catalog;
         _store = store;
         _files = files;
+        _workspace = workspace;
         Kind = kind;
         _runner = runners.First(r => r.Kind == kind);
         _explorer = explorers.First(e => e.Kind == kind);
@@ -144,6 +163,13 @@ public abstract class QueryConsolePageModel : PageModel
     [BindProperty]
     public string? Schema { get; set; }
 
+    /// <summary>
+    /// Pestaña del editor desde la que se ejecutó: el resultado se le asigna a ella (cada pestaña conserva el suyo,
+    /// como las ventanas de consulta de SSMS). Solo vuelve al HTML como atributo; nunca toca el SQL.
+    /// </summary>
+    [BindProperty]
+    public string? TabId { get; set; }
+
     public QueryResult? Result { get; private set; }
 
     /// <summary>Si el resultado se puede editar en la grilla (null = la conexión no admite edición; ver <see cref="EditHint"/>).</summary>
@@ -176,9 +202,26 @@ public abstract class QueryConsolePageModel : PageModel
         Connections = _catalog.List(Kind);
 
         if (string.IsNullOrWhiteSpace(Alias))
-            Alias = Connections.FirstOrDefault()?.Alias;
+            RestoreContext();
 
         base.OnPageHandlerExecuting(context);
+    }
+
+    // Al entrar a la página (p. ej. al volver de la otra consola) se retoma la conexión que se usó la última vez en
+    // este motor, con su base o esquema; antes siempre caía en la primera de la lista.
+    private void RestoreContext()
+    {
+        var saved = _workspace.Get(Kind);
+        var known = Connections.FirstOrDefault(c => c.Alias.Equals(saved.Alias, StringComparison.OrdinalIgnoreCase));
+
+        Alias = known?.Alias ?? Connections.FirstOrDefault()?.Alias;
+
+        // Solo en la carga de la página: los handlers JSON reciben su contexto como parámetro.
+        if (known != null && HttpMethods.IsGet(Request.Method) && string.IsNullOrEmpty(Request.Query["handler"]))
+        {
+            Database ??= saved.Database;
+            Schema ??= saved.Schema;
+        }
     }
 
     public void OnGet()
@@ -189,6 +232,9 @@ public abstract class QueryConsolePageModel : PageModel
 
     public async Task<IActionResult> OnPostRunAsync(CancellationToken cancellationToken)
     {
+        if (SelectedConnection != null)
+            _workspace.SaveContext(Kind, Alias, Database, Schema);
+
         Result = await ExecuteAsync(cancellationToken);
 
         if (Result != null)
@@ -404,6 +450,25 @@ public abstract class QueryConsolePageModel : PageModel
             };
         });
 
+    // --- Sesión de trabajo (db-workspace.json, versionado) ---
+
+    public IActionResult OnGetWorkspace() => new JsonResult(_workspace.Get(Kind));
+
+    public IActionResult OnPostSaveWorkspace([FromBody] WorkspaceBody body)
+    {
+        if (body.Context)
+        {
+            // Solo conexiones que existen: el navegador no inventa nombres que terminen en el repo.
+            var known = _catalog.Find(Kind, body.Alias);
+
+            return new JsonResult(known == null
+                ? _workspace.Get(Kind)
+                : _workspace.SaveContext(Kind, known.Alias, body.Database, body.Schema));
+        }
+
+        return new JsonResult(_workspace.SaveTabs(Kind, body.Files, body.ActiveFile));
+    }
+
     // --- Archivos .sql (abrir, guardar, navegar carpetas) ---
     // El sitio corre en tu máquina y estas páginas solo responden a localhost, así que "la ruta" es una ruta
     // del disco local. Solo se tocan archivos .sql (ver SqlFileService).
@@ -579,16 +644,16 @@ public abstract class QueryConsolePageModel : PageModel
 
 public class OracleModel : QueryConsolePageModel
 {
-    public OracleModel(IDbConnectionCatalog catalog, IDbConnectionStore store, IEnumerable<ISqlQueryRunner> runners, IEnumerable<IDbExplorer> explorers, IEnumerable<IRowEditor> editors, ISqlFileService files)
-        : base(catalog, store, runners, explorers, editors, files, DatabaseKind.Oracle)
+    public OracleModel(IDbConnectionCatalog catalog, IDbConnectionStore store, IEnumerable<ISqlQueryRunner> runners, IEnumerable<IDbExplorer> explorers, IEnumerable<IRowEditor> editors, ISqlFileService files, IWorkspaceStore workspace)
+        : base(catalog, store, runners, explorers, editors, files, workspace, DatabaseKind.Oracle)
     {
     }
 }
 
 public class SqlServerModel : QueryConsolePageModel
 {
-    public SqlServerModel(IDbConnectionCatalog catalog, IDbConnectionStore store, IEnumerable<ISqlQueryRunner> runners, IEnumerable<IDbExplorer> explorers, IEnumerable<IRowEditor> editors, ISqlFileService files)
-        : base(catalog, store, runners, explorers, editors, files, DatabaseKind.SqlServer)
+    public SqlServerModel(IDbConnectionCatalog catalog, IDbConnectionStore store, IEnumerable<ISqlQueryRunner> runners, IEnumerable<IDbExplorer> explorers, IEnumerable<IRowEditor> editors, ISqlFileService files, IWorkspaceStore workspace)
+        : base(catalog, store, runners, explorers, editors, files, workspace, DatabaseKind.SqlServer)
     {
     }
 }

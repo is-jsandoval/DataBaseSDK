@@ -107,3 +107,99 @@ public class ConnectionImportTests : IDisposable
         Assert.Empty(Store(TargetPath).List(DatabaseKind.SqlServer));
     }
 }
+
+public class SharedConnectionsFileTests : IDisposable
+{
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "dbsdk-shared-" + Guid.NewGuid().ToString("N"));
+    private string LocalPath => Path.Combine(_directory, "maquina-a", ".local", "db-connections.json");
+    private string OtherLocalPath => Path.Combine(_directory, "maquina-b", ".local", "db-connections.json");
+    private string SharedPath => Path.Combine(_directory, "db-connections.shared.json");
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_directory))
+            Directory.Delete(_directory, recursive: true);
+    }
+
+    private DbConnectionStore Store(string? local = null) => new(new DpapiSecretProtector(), local ?? LocalPath, sharedPath: SharedPath);
+
+    private static StoredConnection Dev() => new()
+    {
+        Alias = "DEV", Kind = DatabaseKind.SqlServer, Host = "sql.banco.local", Port = 1433, User = "lector", Password = "S3cr3t;clave", AllowWrite = true
+    };
+
+    [Fact]
+    public void Saving_writes_server_and_user_to_the_shared_file_but_never_the_password_or_the_write_permission()
+    {
+        Store().Save(Dev());
+
+        var json = File.ReadAllText(SharedPath);
+
+        Assert.Contains("sql.banco.local", json);
+        Assert.Contains("lector", json);
+        Assert.DoesNotContain("S3cr3t", json);
+        Assert.DoesNotContain("password", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("allowWrite", json);
+    }
+
+    [Fact]
+    public void Another_machine_sees_the_shared_connections_without_password_and_keeps_the_one_it_types()
+    {
+        Store().Save(Dev());
+
+        var other = Store(OtherLocalPath);
+        var seen = other.Get(DatabaseKind.SqlServer, "DEV");
+
+        Assert.NotNull(seen);
+        Assert.Equal("lector", seen!.User);
+        Assert.Null(seen.Password);
+        Assert.False(seen.AllowWrite);
+
+        seen.Password = "otra-clave";
+        other.Save(seen);
+
+        Assert.Equal("otra-clave", Store(OtherLocalPath).Get(DatabaseKind.SqlServer, "DEV")!.Password);
+        Assert.DoesNotContain("otra-clave", File.ReadAllText(SharedPath));
+    }
+
+    [Fact]
+    public void Existing_local_connections_are_published_on_startup_without_overwriting_the_shared_ones()
+    {
+        new DbConnectionStore(new DpapiSecretProtector(), LocalPath).Save(Dev());   // de antes de existir el archivo versionado
+
+        var shared = Store().Get(DatabaseKind.SqlServer, "DEV");
+
+        Assert.Contains("sql.banco.local", File.ReadAllText(SharedPath));
+        Assert.Equal("S3cr3t;clave", shared!.Password);   // la local manda: conserva su clave
+
+        var changed = Dev();
+        changed.Host = "sql2.banco.local";
+        Store(OtherLocalPath).Save(changed);
+        Store();                                           // reabrir la máquina A no pisa lo que vino de B
+
+        Assert.Contains("sql2.banco.local", File.ReadAllText(SharedPath));
+    }
+
+    [Fact]
+    public void Deleting_removes_it_from_the_shared_file_too()
+    {
+        Store().Save(Dev());
+
+        Assert.True(Store(OtherLocalPath).Delete(DatabaseKind.SqlServer, "DEV"));   // B solo la tenía por el versionado
+
+        Assert.DoesNotContain("sql.banco.local", File.ReadAllText(SharedPath));
+        Assert.Empty(Store(OtherLocalPath).List(DatabaseKind.SqlServer));
+    }
+
+    [Fact]
+    public void A_corrupt_shared_file_is_left_untouched_and_local_connections_still_work()
+    {
+        Directory.CreateDirectory(_directory);
+        File.WriteAllText(SharedPath, "{ esto no es json");
+
+        Store().Save(Dev());
+
+        Assert.Equal("{ esto no es json", File.ReadAllText(SharedPath));
+        Assert.Equal("lector", Store().Get(DatabaseKind.SqlServer, "DEV")!.User);
+    }
+}

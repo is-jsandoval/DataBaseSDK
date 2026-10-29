@@ -222,35 +222,56 @@ public interface IDbConnectionStore
 /// Conexiones guardadas desde la UI, dentro del proyecto: <c>&lt;repo&gt;\.local\db-connections.json</c>
 /// (en el .gitignore; <c>DBSDK_CONNECTIONS_FILE</c> cambia la ruta). La contraseña se guarda
 /// cifrada con <see cref="ISecretProtector"/>; el resto de los campos va en claro.
+/// Además se mantiene una copia <b>sin contraseñas</b> en <c>&lt;repo&gt;\db-connections.shared.json</c>,
+/// que sí se versiona: al clonar el repo en otra máquina aparecen los servidores y usuarios y solo
+/// hay que volver a escribir la clave (la cifrada con DPAPI no serviría allí de todos modos).
 /// </summary>
 public class DbConnectionStore : IDbConnectionStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private readonly string _path;
+    private readonly string? _sharedPath;
     private readonly ISecretProtector _protector;
     private readonly object _lock = new();
 
     /// <summary>Variable de entorno que fija desde dónde importar conexiones la primera vez; el valor <c>none</c> lo desactiva.</summary>
     public const string ImportEnvVariable = "DBSDK_IMPORT_CONNECTIONS_FROM";
 
+    /// <summary>Variable de entorno con la ruta del archivo versionado sin contraseñas; el valor <c>none</c> lo desactiva.</summary>
+    public const string SharedEnvVariable = "DBSDK_SHARED_CONNECTIONS_FILE";
+
     /// <param name="path">Archivo de conexiones (null = <c>DBSDK_CONNECTIONS_FILE</c> o <see cref="DefaultPath"/>).</param>
     /// <param name="importFrom">Archivo de otro proyecto del que traer las conexiones la PRIMERA vez (null = el de por defecto, solo si <paramref name="path"/> tampoco se indicó).</param>
-    public DbConnectionStore(ISecretProtector protector, string? path = null, string? importFrom = null)
+    /// <param name="sharedPath">Archivo versionado sin contraseñas (null = el de por defecto, solo si <paramref name="path"/> tampoco se indicó: así las pruebas nunca tocan el del repo).</param>
+    public DbConnectionStore(ISecretProtector protector, string? path = null, string? importFrom = null, string? sharedPath = null)
     {
         _protector = protector;
 
         var fromEnv = Environment.GetEnvironmentVariable("DBSDK_CONNECTIONS_FILE");
         _path = path ?? (string.IsNullOrWhiteSpace(fromEnv) ? DefaultPath : fromEnv);
+        _sharedPath = sharedPath ?? (path == null ? DefaultSharedPath() : null);
 
         var source = importFrom ?? (path == null && string.IsNullOrWhiteSpace(fromEnv) ? DefaultImportPath() : null);
 
         if (source != null)
             ImportOnce(source);
+
+        PublishMissingToShared();
     }
 
     /// <summary><c>&lt;repo&gt;\.local\db-connections.json</c> — las conexiones viven con el proyecto.</summary>
     public static string DefaultPath => Path.Combine(ProjectPaths.DataDirectory, "db-connections.json");
+
+    private static string? DefaultSharedPath()
+    {
+        var fromEnv = Environment.GetEnvironmentVariable(SharedEnvVariable);
+
+        if (!string.IsNullOrWhiteSpace(fromEnv))
+            return fromEnv.Equals("none", StringComparison.OrdinalIgnoreCase) ? null : fromEnv;
+
+        return Path.Combine(ProjectPaths.Root, "db-connections.shared.json");
+    }
 
     // Este proyecto nació de AzureDevOpsSdk, que guardaba sus conexiones en <hermano>\AzureDevOpsSdk\.local\: si existe y
     // todavía no hay archivo propio, se traen una única vez. DBSDK_IMPORT_CONNECTIONS_FROM=<ruta> elige otro origen; =none lo apaga.
@@ -302,7 +323,14 @@ public class DbConnectionStore : IDbConnectionStore
     {
         lock (_lock)
         {
-            return ReadAll().Where(r => r.Kind == kind)
+            var local = ReadAll();
+
+            // Las del archivo versionado que no están en el local (repo recién clonado) se muestran sin clave.
+            var fromShared = (ReadShared() ?? [])
+                .Where(s => !local.Any(r => SameKey(r, s.Kind, s.Alias)))
+                .Select(s => s.ToRow());
+
+            return local.Concat(fromShared).Where(r => r.Kind == kind)
                 .Select(ToConnection)
                 .OrderBy(c => c.Alias, StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -344,6 +372,11 @@ public class DbConnectionStore : IDbConnectionStore
                 all.Add(row);
 
             WriteAll(all);
+            UpdateShared(shared =>
+            {
+                shared.RemoveAll(s => SameKey(s, row.Kind, row.Alias));
+                shared.Add(SharedRow.From(row));
+            });
         }
     }
 
@@ -352,12 +385,85 @@ public class DbConnectionStore : IDbConnectionStore
         lock (_lock)
         {
             var all = ReadAll();
-            var removed = all.RemoveAll(r => r.Kind == kind && r.Alias.Equals(alias, StringComparison.OrdinalIgnoreCase));
+            var removed = all.RemoveAll(r => SameKey(r, kind, alias));
 
             if (removed > 0)
                 WriteAll(all);
 
-            return removed > 0;
+            // También se quita del versionado: si no, al volver a abrir reaparecería (sin clave).
+            var removedShared = 0;
+            UpdateShared(shared => removedShared = shared.RemoveAll(s => SameKey(s, kind, alias)));
+
+            return removed + removedShared > 0;
+        }
+    }
+
+    private static bool SameKey(Row r, DatabaseKind kind, string alias) =>
+        r.Kind == kind && r.Alias.Equals(alias, StringComparison.OrdinalIgnoreCase);
+
+    private static bool SameKey(SharedRow s, DatabaseKind kind, string alias) =>
+        s.Kind == kind && s.Alias.Equals(alias, StringComparison.OrdinalIgnoreCase);
+
+    // Al arrancar, las conexiones locales que todavía no estén en el archivo versionado se agregan (las de antes de que
+    // existiera, o las importadas). No pisa lo que ya hay: lo del repo puede venir de otra máquina.
+    private void PublishMissingToShared()
+    {
+        lock (_lock)
+        {
+            var local = ReadAll();
+
+            if (local.Count == 0)
+                return;
+
+            UpdateShared(shared =>
+            {
+                foreach (var row in local.Where(r => !shared.Any(s => SameKey(s, r.Kind, r.Alias))))
+                    shared.Add(SharedRow.From(row));
+            });
+        }
+    }
+
+    /// <summary>null = no hay archivo versionado configurado o está dañado (en ese caso no se toca: lo arregla git).</summary>
+    private List<SharedRow>? ReadShared()
+    {
+        if (_sharedPath == null || !File.Exists(_sharedPath))
+            return _sharedPath == null ? null : [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<SharedFileModel>(File.ReadAllText(_sharedPath, Encoding.UTF8), JsonOptions)?.Connections ?? [];
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private void UpdateShared(Action<List<SharedRow>> change)
+    {
+        var shared = ReadShared();
+
+        if (shared == null)
+            return;
+
+        var before = JsonSerializer.Serialize(shared, JsonOptions);
+        change(shared);
+
+        // Orden estable y sin reescribir si nada cambió: el diff de git muestra solo lo que de verdad cambió.
+        shared = shared.OrderBy(s => s.Kind).ThenBy(s => s.Alias, StringComparer.OrdinalIgnoreCase).ToList();
+
+        if (File.Exists(_sharedPath) && JsonSerializer.Serialize(shared, JsonOptions) == before)
+            return;
+
+        try
+        {
+            var temp = _sharedPath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(new SharedFileModel { Connections = shared }, JsonOptions) + Environment.NewLine, new UTF8Encoding(false));
+            File.Move(temp, _sharedPath!, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // La copia versionada es una comodidad: si no se puede escribir, la conexión local ya quedó guardada.
         }
     }
 
@@ -439,5 +545,39 @@ public class DbConnectionStore : IDbConnectionStore
         [JsonPropertyName("trustServerCertificate")] public bool TrustServerCertificate { get; set; } = true;
         [JsonPropertyName("allowWrite")] public bool AllowWrite { get; set; }
         [JsonPropertyName("passwordProtected")] public string? PasswordProtected { get; set; }
+    }
+
+    private class SharedFileModel
+    {
+        [JsonPropertyName("connections")]
+        public List<SharedRow> Connections { get; set; } = [];
+    }
+
+    // Sin campo de contraseña ni de edición de datos: así es imposible que lleguen al archivo versionado. La edición se
+    // habilita a propósito en cada máquina.
+    private class SharedRow
+    {
+        [JsonPropertyName("alias")] public string Alias { get; set; } = string.Empty;
+        [JsonPropertyName("kind")] [JsonConverter(typeof(JsonStringEnumConverter))] public DatabaseKind Kind { get; set; }
+        [JsonPropertyName("host")] public string Host { get; set; } = string.Empty;
+        [JsonPropertyName("port")] public int? Port { get; set; }
+        [JsonPropertyName("database")] public string? Database { get; set; }
+        [JsonPropertyName("oracleMode")] public string OracleMode { get; set; } = OracleModes.ServiceName;
+        [JsonPropertyName("oracleTarget")] public string? OracleTarget { get; set; }
+        [JsonPropertyName("windowsAuth")] public bool WindowsAuth { get; set; }
+        [JsonPropertyName("user")] public string? User { get; set; }
+        [JsonPropertyName("trustServerCertificate")] public bool TrustServerCertificate { get; set; } = true;
+
+        public static SharedRow From(Row r) => new()
+        {
+            Alias = r.Alias, Kind = r.Kind, Host = r.Host, Port = r.Port, Database = r.Database, OracleMode = r.OracleMode,
+            OracleTarget = r.OracleTarget, WindowsAuth = r.WindowsAuth, User = r.User, TrustServerCertificate = r.TrustServerCertificate
+        };
+
+        public Row ToRow() => new()
+        {
+            Alias = Alias, Kind = Kind, Host = Host, Port = Port, Database = Database, OracleMode = OracleMode,
+            OracleTarget = OracleTarget, WindowsAuth = WindowsAuth, User = User, TrustServerCertificate = TrustServerCertificate
+        };
     }
 }

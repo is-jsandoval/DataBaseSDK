@@ -4,6 +4,8 @@
 // Estado:
 //  - Las pestañas abiertas (rutas, cambios sin guardar, posición) viven en localStorage del navegador: al volver
 //    a la página se restauran. Si un archivo cacheado ya no existe en disco se avisa y se conserva el contenido.
+//  - Las rutas de las pestañas (sin texto) también van a db-workspace.json, versionado en el repo: si cambió por un
+//    git pull, al arrancar se abren/cierran pestañas para igualarlo (ver qc-workspace.js).
 //  - Los archivos se leen y guardan en el disco de esta máquina a través del sitio (solo .sql; ver SqlFileService).
 (function () {
     var QC = window.QC;
@@ -46,7 +48,9 @@
             id: 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
             title: '', path: null, text: '', opened: '', saved: '', version: null,
             eol: '\r\n', encoding: 'utf8', missing: false, diskChanged: false, notice: null,
-            scroll: 0, selStart: 0, selEnd: 0
+            scroll: 0, selStart: 0, selEnd: 0,
+            // Conexión con la que consulta ESTA pestaña (como cada ventana de SSMS); null = todavía no eligió: hereda la actual.
+            alias: null, database: null, schema: null
         }, overrides);
     }
 
@@ -82,7 +86,8 @@
             text: t.text,
             saved: t.saved === t.text ? null : t.saved,
             opened: t.opened === t.saved ? null : t.opened,
-            scroll: t.scroll, selStart: t.selStart, selEnd: t.selEnd
+            scroll: t.scroll, selStart: t.selStart, selEnd: t.selEnd,
+            alias: t.alias, database: t.database, schema: t.schema
         };
     }
 
@@ -92,7 +97,8 @@
         return newTab({
             id: p.id, title: p.title, path: p.path, version: p.version, eol: p.eol || '\r\n', encoding: p.encoding || 'utf8',
             missing: !!p.missing, fromDrop: !!p.fromDrop, text: p.text || '', saved: saved, opened: opened,
-            scroll: p.scroll || 0, selStart: p.selStart || 0, selEnd: p.selEnd || 0
+            scroll: p.scroll || 0, selStart: p.selStart || 0, selEnd: p.selEnd || 0,
+            alias: p.alias || null, database: p.database || null, schema: p.schema || null
         });
     }
 
@@ -100,7 +106,8 @@
 
     function persist() {
         syncFromView();
-        var data = { activeId: activeId, mru: mru, tabs: tabs.map(pack) };
+        scheduleWorkspace();
+        var data = { activeId: activeId, mru: mru, tabs: tabs.map(pack), workspaceStamp: workspaceStamp };
 
         if (QC.writeJson(sessionKey, data)) return;
 
@@ -115,6 +122,74 @@
 
     var persistTimer = null;
     function schedulePersist() { clearTimeout(persistTimer); persistTimer = setTimeout(persist, 400); }
+
+    // ---------- sesión versionada (db-workspace.json; lógica en qc-workspace.js) ----------
+
+    var workspaceStamp = null;   // sello del archivo del repo la última vez que este navegador lo vio o lo escribió
+    var workspaceReady = false;  // hasta comparar con el repo al arrancar no se manda nada (pisaría lo que trajo un git pull)
+    var workspaceSent = null;    // firma de lo último mandado: persist corre en cada tecla, el servidor solo se entera si cambió algo
+    var workspaceTimer = null;
+
+    function scheduleWorkspace() {
+        if (!workspaceReady) return;
+        clearTimeout(workspaceTimer);
+        workspaceTimer = setTimeout(sendWorkspace, 600);
+    }
+
+    function sendWorkspace() {
+        var current = active();
+        var snap = QC.workspace.snapshot(tabs, current && current.path);
+        var signature = QC.workspace.signature(snap);
+        if (signature === workspaceSent) return;
+
+        workspaceSent = signature;
+        QC.post('SaveWorkspace', snap).then(function (state) {
+            workspaceStamp = state.stamp;
+            QC.writeJson(sessionKey, Object.assign(QC.readJson(sessionKey, {}), { workspaceStamp: workspaceStamp }));
+        }).catch(function () { workspaceSent = null; /* sin servidor: se reintenta en el próximo cambio */ });
+    }
+
+    // Abre un archivo sin activarlo ni avisar si falta: viene del repo y puede ser una ruta de otra computadora.
+    function openQuietly(path) {
+        if (findTab(path)) return Promise.resolve();
+
+        return QC.get('ReadFile', { path: path }).then(function (file) {
+            tabs.push(newTab({
+                title: file.name, path: file.path, text: file.text, opened: file.text, saved: file.text,
+                version: file.version, eol: file.eol, encoding: file.encoding
+            }));
+        }).catch(function () { /* no existe en esta máquina: simplemente no se abre */ });
+    }
+
+    // Si el archivo del repo cambió desde la última vez (git pull, otra computadora), las pestañas pasan a ser las suyas.
+    function adoptWorkspace(remote, lastStamp) {
+        var nothingInRepo = !remote.files.length && !remote.activeFile;
+        if (remote.stamp === lastStamp || nothingInRepo) return Promise.resolve();
+
+        var plan = QC.workspace.reconcile(tabs.map(function (t) {
+            return { path: t.path, dirty: isDirty(t), missing: t.missing };
+        }), remote);
+
+        return plan.open.reduce(function (chain, file) {
+            return chain.then(function () { return openQuietly(file.path); });
+        }, Promise.resolve()).then(function () {
+            // Cada archivo toma la conexión con la que se consultaba en la otra computadora.
+            plan.open.concat(plan.contexts).forEach(function (file) {
+                var tab = findTab(file.path);
+                if (tab && file.alias) { tab.alias = file.alias; tab.database = file.database || null; tab.schema = file.schema || null; }
+            });
+
+            plan.close.forEach(function (path) { var tab = findTab(path); if (tab) closeTab(tab.id, true); });
+
+            // La "Consulta 1" vacía con la que arranca una máquina nueva sobra si llegaron archivos.
+            tabs.filter(function (t) { return !t.path && !t.fromDrop && !t.text.trim(); }).forEach(function (t) {
+                if (tabs.length > 1) closeTab(t.id, true);
+            });
+
+            var target = plan.activeFile && findTab(plan.activeFile);
+            activate(target ? target.id : activeId);
+        });
+    }
 
     // ---------- diff por líneas (para el gutter) ----------
 
@@ -338,6 +413,8 @@
         var current = active();
 
         return {
+            activeId: activeId,
+            ids: tabs.map(function (t) { return t.id; }),
             activePath: current && current.path ? current.path : '',
             open: tabs.filter(function (t) { return t.path; }).map(function (t) { return t.path; }),
             dirty: tabs.filter(function (t) { return t.path && isDirty(t); }).map(function (t) { return t.path; })
@@ -919,6 +996,9 @@
         syncFromView();
         var selected = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
         hiddenSql.value = selected.trim() ? selected : textarea.value;
+        // El resultado que vuelva es de esta pestaña (query-results.js lo guarda para ella).
+        var tabIdInput = $('tab-id');
+        if (tabIdInput) tabIdInput.value = activeId;
         persist();
     }, true);
 
@@ -1202,6 +1282,21 @@
             return Picker.open({ mode: 'folder', title: opts.title || 'Abrir carpeta', folder: opts.folder || '' });
         },
         tabsInfo: tabsInfo,
+
+        // Conexión de la pestaña activa (query-console.js la aplica a los selectores al cambiar de pestaña) y su cambio
+        // cuando el usuario elige otra conexión, base o esquema: solo afecta a esta pestaña, como en SSMS.
+        activeContext: function () {
+            var tab = active();
+            return tab && tab.alias ? { alias: tab.alias, database: tab.database, schema: tab.schema } : null;
+        },
+        setActiveContext: function (ctx) {
+            var tab = active();
+            if (!tab || !ctx) return;
+            tab.alias = ctx.alias || null;
+            tab.database = ctx.database || null;
+            tab.schema = ctx.schema || null;
+            persist();
+        },
         // fn({ activePath, open[], dirty[] }) se llama ya mismo y cada vez que cambian las pestañas.
         onTabsChanged: function (fn) {
             tabListeners.push(fn);
@@ -1213,6 +1308,7 @@
 
     var initialSql = textarea.value;
     var session = QC.readJson(sessionKey, null);
+    workspaceStamp = (session && session.workspaceStamp) || null;
 
     if (session && Array.isArray(session.tabs) && session.tabs.length) {
         tabs = session.tabs.map(unpack);
@@ -1239,5 +1335,13 @@
     Promise.all(tabs.filter(function (t) { return t.path; }).map(revalidate)).then(function () {
         var missing = tabs.filter(function (t) { return t.missing; });
         if (missing.length) QC.toast(missing.length + ' archivo(s) de la sesión anterior ya no existen en disco; sus pestañas conservan el contenido de la caché.', 'warning');
+
+        // Después de revisar el disco (así una pestaña que ya no existe no se cierra por "limpia"), se compara con el repo.
+        return QC.get('Workspace').then(function (remote) {
+            return adoptWorkspace(remote, session && session.workspaceStamp).then(function () { workspaceStamp = remote.stamp; });
+        });
+    }).catch(function () { /* sin sesión versionada: la caché local alcanza */ }).then(function () {
+        workspaceReady = true;
+        persist();
     });
 })();

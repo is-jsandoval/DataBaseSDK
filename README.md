@@ -14,7 +14,7 @@ Cliente web local de bases de datos **SQL Server** y **Oracle** (estilo SSMS / S
 | **Drivers** | `Oracle.ManagedDataAccess.Core` 23.9.0, `Microsoft.Data.SqlClient` 5.2.2 — **solo** en `DataBaseSDK.Core` |
 | **Solo Windows** | Las contraseñas guardadas se cifran con DPAPI (`ProtectedData`, alcance usuario actual) |
 | **Arrancar** | doble clic a [start.cmd](start.cmd) → compila, levanta el sitio en `http://localhost:5130` y lo abre en una ventana de Edge tipo aplicación |
-| **Probar** | `dotnet test` (238 casos) y `node --test DataBaseSDK.Web/js-tests/query-complete.test.js DataBaseSDK.Web/js-tests/query-edit.test.js DataBaseSDK.Web/js-tests/query-explorer.test.js DataBaseSDK.Web/js-tests/query-mru.test.js` (50 casos; pasar los **archivos**, no la carpeta) |
+| **Probar** | `dotnet test` (256 casos) y `node --test DataBaseSDK.Web/js-tests/query-complete.test.js DataBaseSDK.Web/js-tests/query-edit.test.js DataBaseSDK.Web/js-tests/query-explorer.test.js DataBaseSDK.Web/js-tests/query-mru.test.js DataBaseSDK.Web/js-tests/qc-workspace.test.js` (57 casos; pasar los **archivos**, no la carpeta) |
 | **Atajos** | `Ctrl+Enter` ejecutar · `Ctrl+S` / `Ctrl+Shift+S` guardar · `Ctrl+O` abrir · `Ctrl+B` panel izquierdo · **`Ctrl+K` explorador de archivos (derecha)** · **`Ctrl+Tab` archivo anterior** (como SSMS; solo en la ventana tipo aplicación de `start.cmd`, ver §7.1) · `Ctrl+Espacio` autocompletar |
 | **Regla 1** | Las consultas del editor son **de solo lectura** (guard de texto + transacción que nunca se confirma). |
 | **Regla 2** | La **única** ruta de escritura es la edición de filas de la grilla: opt-in por conexión, solo `UPDATE` por clave primaria, validada contra el catálogo, con verificación de valores originales, bitácora previa al commit y rollback ante cualquier fallo. |
@@ -76,8 +76,10 @@ DataBaseSDK/
 ├─ CLAUDE.md                      punteros y reglas duras para Claude Code
 ├─ start.cmd                      compila + levanta + abre ventana (§2.1)
 ├─ .env.example                   variables soportadas, todas opcionales (§8)
-├─ .gitignore                     bin/ obj/ .env .vs/ .vscode/ .local/   (no hay repo git inicializado)
-├─ .local/                        (se crea solo, ignorada) conexiones y bitácora (§8.2)
+├─ .gitignore                     bin/ obj/ .env .vs/ .vscode/ .local/
+├─ db-connections.shared.json     (versionado) conexiones guardadas SIN contraseñas: servidor, puerto, servicio, usuario (§5.5)
+├─ db-workspace.json              (versionado, se crea al usar la consola) pestañas abiertas y conexión elegida por motor (§5.11)
+├─ .local/                        (se crea solo, ignorada) conexiones con clave cifrada y bitácora (§8.2)
 │
 ├─ DataBaseSDK.Core/              ← NÚCLEO, sin interfaz gráfica, namespace DataBaseSDK.Core
 │  ├─ Models.cs                   DatabaseKind, DbConnectionInfo, QueryOptions, QueryColumn, QueryResult, QueryRejectedException
@@ -91,6 +93,7 @@ DataBaseSDK/
 │  ├─ RowEditing.cs               modelos de edición, ITableDescriber, SingleTableAnalyzer, bitácora, IRowEditor
 │  ├─ RowEditors.cs               RowEditorBase, SqlServerRowEditor, OracleRowEditor (la ruta de escritura)
 │  ├─ SqlFiles.cs                 ISqlFileService / SqlFileService (abrir, guardar, navegar, localizar .sql)
+│  ├─ Workspace.cs                IWorkspaceStore / WorkspaceStore: sesión versionada (db-workspace.json, §5.11)
 │  ├─ LocalAccess.cs              ¿la petición es de esta máquina? (lógica pura)
 │  ├─ ProjectPaths.cs             raíz del repo (carpeta con DataBaseSDK.sln) y .local
 │  └─ ServiceCollectionExtensions.cs   AddDatabaseConsole(): registra todo en DI
@@ -107,12 +110,12 @@ DataBaseSDK/
 │  │  └─ Shared/
 │  │     ├─ _Layout.cshtml        navbar (SQL Server, Oracle), tema oscuro, Bootstrap
 │  │     ├─ _QueryConsole.cshtml  toda la UI de una consola (HTML + <style>), compartida por los dos motores
-│  │     └─ _QueryScripts.cshtml  los 7 <script> de la consola EN SU ORDEN de carga (una sola copia para las dos páginas)
+│  │     └─ _QueryScripts.cshtml  los 9 <script> de la consola EN SU ORDEN de carga (una sola copia para las dos páginas)
 │  ├─ wwwroot/
 │  │  ├─ css/site.css, css/dark-theme.css
-│  │  ├─ js/qc-common.js, qc-mru.js, query-editor.js, query-complete.js, query-edit.js, query-explorer.js, query-console.js   (§7)
+│  │  ├─ js/qc-common.js, qc-mru.js, qc-workspace.js, query-editor.js, query-complete.js, query-edit.js, query-results.js, query-explorer.js, query-console.js   (§7)
 │  │  └─ lib/bootstrap/dist/{css,js}   Bootstrap 5.1.0 (solo min.css y bundle.min.js + mapas)
-│  └─ js-tests/query-complete.test.js, query-edit.test.js, query-explorer.test.js, query-mru.test.js   pruebas de Node (sin navegador)
+│  └─ js-tests/query-complete.test.js, query-edit.test.js, query-explorer.test.js, query-mru.test.js, qc-workspace.test.js   pruebas de Node (sin navegador)
 │
 └─ DataBaseSDK.Tests/             ← xUnit; referencia solo a Core (InternalsVisibleTo)
    ├─ QueryRunnerTests.cs         + los FAKES de DbConnection/DbCommand/DbTransaction/DbParameter (§10.2)
@@ -121,7 +124,8 @@ DataBaseSDK/
    ├─ RowEditingTests.cs          analizador de SELECT, editor de filas, valores, bitácora
    ├─ TableDescribeTests.cs       DescribeTableAsync por motor, permisos de escritura
    ├─ SqlFileServiceTests.cs      archivos .sql, codificaciones, conflictos, Locate, ProjectPaths
-   └─ LocalAccessAndImportTests.cs  LocalAccess, importación única de conexiones
+   ├─ LocalAccessAndImportTests.cs  LocalAccess, importación única de conexiones, copia versionada sin contraseñas
+   └─ WorkspaceStoreTests.cs      sesión versionada: secciones por motor, rutas relativas, validación, sello
 ```
 
 A diferencia de `AzureDevOpsSdk`, **no hay `<Compile Include>` explícitos**: cada proyecto compila su propia carpeta con las reglas por defecto del SDK. Una carpeta o archivo nuevo dentro de un proyecto se compila solo.
@@ -134,7 +138,7 @@ Tamaño aproximado: Core ≈ 3.500 líneas de C#; `QueryConsolePageModel.cs` ≈
 
 ```
 Navegador (localhost)
-   │  HTML (Razor) + 7 scripts JS planos
+   │  HTML (Razor) + 9 scripts JS planos
    ▼
 Kestrel (solo loopback) ── middleware LocalAccess (403 si no es local) ── archivos estáticos ── Razor Pages
    │
@@ -241,6 +245,7 @@ Si un alias está en los dos lados **gana el del `.env`**.
 - `Save`: crea o reemplaza por `Kind + Alias` (sin distinguir mayúsculas). `Password == null` → **conserva** la clave guardada; `""` → la borra.
 - Escritura **atómica** (`.tmp` + `File.Move(overwrite)`); archivo corrupto → copia `.corrupto` y arranca vacío; todo bajo un `lock`.
 - Ruta: `DBSDK_CONNECTIONS_FILE` o `<repo>\.local\db-connections.json`.
+- **Copia versionada sin contraseñas** (`<repo>\db-connections.shared.json`; `DBSDK_SHARED_CONNECTIONS_FILE` cambia la ruta, `none` la apaga; con una ruta explícita del almacén —las pruebas— no se usa salvo que se pase `sharedPath`). Mismos campos que el JSON local **menos** `passwordProtected` y `allowWrite` (la clase `SharedRow` ni siquiera los tiene). `Save` la actualiza, `Delete` quita de ambos lados, y al construir el almacén se agregan las locales que falten (sin pisar lo que ya trae el repo). `List` une las dos: las que solo están en la copia versionada (repo recién clonado en otra máquina) aparecen **sin clave**; al escribirla y guardar, la clave queda solo en el local cifrada. Orden estable (motor, alias) y sin reescribir si nada cambió, para que el diff de git sea limpio. Archivo dañado → no se toca (se arregla con git) y lo local sigue funcionando.
 - **Importación única** (§8.3): la primera vez, si aún no existe el archivo propio, trae las conexiones de `..\AzureDevOpsSdk\.local\db-connections.json` (o de `DBSDK_IMPORT_CONNECTIONS_FROM`; `none` la apaga), **forzando `allowWrite = false`**: la edición de datos nunca se importa. No se vuelve a importar aunque después se borren todas (el archivo propio ya existe). El archivo de origen no se toca. Origen ilegible → se ignora sin fallar.
 
 ### 5.6 Explorador — [Explorer.cs](DataBaseSDK.Core/Explorer.cs) y [Explorers.cs](DataBaseSDK.Core/Explorers.cs)
@@ -305,7 +310,16 @@ El SQL se arma **solo** con `Quote(meta.Schema)`, `Quote(meta.Name)` y los nombr
 - [ProjectPaths.cs](DataBaseSDK.Core/ProjectPaths.cs): `Root` = primera carpeta hacia arriba (desde `AppContext.BaseDirectory` y desde el directorio actual) que contenga **`DataBaseSDK.sln`**; si no la encuentra, el directorio actual. `DataDirectory` = `<Root>\.local`. ⚠️ Renombrar o mover el `.sln` rompe esto.
 
 ### 5.10 DI — `AddDatabaseConsole()` ([ServiceCollectionExtensions.cs](DataBaseSDK.Core/ServiceCollectionExtensions.cs))
-Todo **singleton**: `ISecretProtector` (DPAPI), `IDbConnectionStore`, `IDbConnectionCatalog`, dos `ISqlQueryRunner`, `ISqlFileService`, dos `IDbExplorer`, `IEditAuditLog` (`FileEditAuditLog`), dos `IRowEditor` (cada uno recibe el explorador de su motor como `ITableDescriber`). Los consumidores reciben `IEnumerable<…>` y eligen por `Kind`.
+Todo **singleton**: `ISecretProtector` (DPAPI), `IDbConnectionStore`, `IDbConnectionCatalog`, dos `ISqlQueryRunner`, `ISqlFileService`, `IWorkspaceStore`, dos `IDbExplorer`, `IEditAuditLog` (`FileEditAuditLog`), dos `IRowEditor` (cada uno recibe el explorador de su motor como `ITableDescriber`). Los consumidores reciben `IEnumerable<…>` y eligen por `Kind`.
+
+### 5.11 Sesión versionada — [Workspace.cs](DataBaseSDK.Core/Workspace.cs)
+`IWorkspaceStore` / `WorkspaceStore` guarda en **`<repo>\db-workspace.json` (versionado)** lo que estaba abierto en cada consola, para que (1) al pasar de Oracle a SQL Server y volver no se pierda la conexión elegida, y (2) al subir a git y abrir el proyecto en otra computadora aparezcan las mismas pestañas.
+- Formato: una sección por motor (`"Oracle"`, `"SqlServer"`) con `alias`, `database` (SQL Server), `schema` (Oracle), `files[]` (cada uno `{path, alias, database, schema}`: la conexión de esa pestaña) y `activeFile`; el `alias`/`database`/`schema` de la sección es la última conexión elegida, la que heredan las pestañas nuevas. **Solo rutas y nombres**: nunca el texto de las consultas ni contraseñas (el texto sin guardar sigue en la caché del navegador, `qc-session-<kind>`).
+- Rutas dentro del repo se guardan **relativas con `/`** (`QuerysJean/…/x.sql`) y vuelven como ruta completa de la máquina que lee; las de fuera del repo quedan absolutas (en otra máquina simplemente no se abren). Una relativa con `..` que sale del repo se ignora.
+- Validación: solo rutas completas a `.sql` (≤ 1024 caracteres, sin caracteres de control), sin repetir (sin distinguir mayúsculas), máximo **50** (`MaxFiles`); el activo debe estar en la lista; nombres de conexión/base/esquema ≤ 128 sin caracteres de control. `SaveWorkspace` con `context: true` solo acepta un alias que exista en el catálogo.
+- `Stamp`: hash del contenido de la sección (con rutas relativas, así es igual en todas las máquinas). El navegador lo guarda en su sesión; si al arrancar el del repo es otro, el archivo cambió por fuera (git pull) y las pestañas se igualan (§7.1).
+- Sin reescribir si nada cambió, secciones en orden fijo, escritura atómica: diff de git limpio. Archivo dañado (p. ej. conflicto de merge) → no se pisa y se ignora. Ruta: `DBSDK_WORKSPACE_FILE` (`none` lo apaga).
+- La página, al cargar sin `Alias` (GET), toma la conexión de su sección si sigue existiendo (y su base/esquema); si no, la primera. `Run` la recuerda; el JS también al cambiar conexión, base o esquema.
 
 ---
 
@@ -317,7 +331,7 @@ El antiforgery de Razor Pages está activo por defecto en los POST.
 
 ### 6.2 Páginas
 - `/` ([Index](DataBaseSDK.Web/Pages/Index.cshtml)): portada con una tarjeta por motor (cuántas conexiones, cuántas con edición habilitada) y un recuadro de "Primeros pasos" si no hay ninguna.
-- `/SqlServer`, `/Oracle`: `@page` + `@model SqlServerModel|OracleModel` + `<partial name="_QueryConsole">` + `<partial name="_QueryScripts">`, que carga los 7 scripts **en este orden** (importa: cada uno depende de los anteriores): `qc-common.js`, `qc-mru.js`, `query-editor.js`, `query-complete.js`, `query-edit.js`, `query-explorer.js`, `query-console.js`.
+- `/SqlServer`, `/Oracle`: `@page` + `@model SqlServerModel|OracleModel` + `<partial name="_QueryConsole">` + `<partial name="_QueryScripts">`, que carga los 9 scripts **en este orden** (importa: cada uno depende de los anteriores): `qc-common.js`, `qc-mru.js`, `qc-workspace.js`, `query-editor.js`, `query-complete.js`, `query-edit.js`, `query-results.js`, `query-explorer.js`, `query-console.js`.
 - `/Error`.
 
 ### 6.3 [QueryConsolePageModel.cs](DataBaseSDK.Web/Pages/QueryConsolePageModel.cs)
@@ -345,13 +359,15 @@ Clase base abstracta (`OracleModel`, `SqlServerModel` solo fijan `kind`). Propie
 | `LocateFile` | POST JSON | `{name, size, folders[]}` | `{matches[]}` |
 | `SaveFile` | POST JSON | `{path, text, eol, encoding, expectedVersion, overwrite}` | `{exists, version, size}` |
 | `ApplyEdits` | POST JSON | `ApplyEditsBody` = `RowEditRequest` + `alias` | `{ok, rowsAffected, dryRun, statements}` |
+| `Workspace` | GET | — | `{alias, database, schema, files[], activeFile, stamp}` (rutas completas; §5.11) |
+| `SaveWorkspace` | POST JSON | `WorkspaceBody`: `{context: true, alias, database, schema}` o `{files[{path, alias, database, schema}], activeFile}` | el mismo objeto que `Workspace` |
 
 **Contratos de error.** Explorador: cualquier excepción → 400 `{error: mensaje del driver}`; cancelación → 499; conexión desconocida → 400. Archivos (`FileCall`): `{error, code}` con `not_found` 404, `access_denied` 403, `too_large` 413, `not_sql` 400, `invalid_path` 400, `conflict` 409, `exists` 409, `io` 500. `ApplyEdits`: `{error, code}` con `write_not_allowed` 403, `not_editable` 400, `invalid` 400, `not_found` 404, `conflict` 409, `row_count` 409, `audit` 500, `database` 400. El JS (`QC.get/post`) convierte toda respuesta no-OK en un `Error` con `.code` y `.status`; si no hay respuesta (`fetch` falla) → `code = 'network'` ("¿sigue corriendo el sitio?").
 
 **Seguridad en los handlers.** Los nombres del cliente nunca se concatenan en SQL; `SaveConnection` valida con `ConnectionValidation` y la contraseña nunca vuelve; los handlers de archivos solo tocan `.sql`; `ApplyEdits` busca la conexión por alias en el **catálogo del servidor** (si `AllowWrite` es falso, el núcleo la rechaza aunque el navegador diga otra cosa).
 
 ### 6.4 [_QueryConsole.cshtml](DataBaseSDK.Web/Pages/Shared/_QueryConsole.cshtml)
-Una sola vista para los dos motores (el `@model` es la base `QueryConsolePageModel`). Contiene: cabecera con dos badges (rojo "✏️ Edición de filas habilitada" — se muestra según la conexión elegida —, gris "🔒 Consultas de solo lectura"); layout de hasta 5 columnas (**panel izquierdo** con pestañas *Objetos* / *Archivos .sql*, **divisor** arrastrable, **editor + resultados**, otro **divisor** y el **explorador de archivos** de la derecha, oculto por defecto: §7.4); formulario `Run` con selectores (conexión, base de datos *o* esquema, filas máx., historial) y el botón *🗂 Explorador* (`data-role="toggle-explorer"`); pestañas de documentos; barra de botones del editor; el editor (`<textarea data-role="sql">` + `<canvas data-role="gutter">`); la grilla; tres modales (*conexión*, *confirmar cambios de la grilla*, *selector de rutas*); y un bloque `<style>` con todo el CSS propio (clases `qc-*`).
+Una sola vista para los dos motores (el `@model` es la base `QueryConsolePageModel`). Contiene: cabecera con dos badges (rojo "✏️ Edición de filas habilitada" — se muestra según la conexión elegida —, gris "🔒 Consultas de solo lectura"); layout de hasta 5 columnas (**panel izquierdo** con pestañas *Objetos* / *Archivos .sql*, **divisor** arrastrable, **editor + resultados**, otro **divisor** y el **explorador de archivos** de la derecha, oculto por defecto: §7.4); formulario `Run` con selectores (conexión, base de datos *o* esquema, filas máx., historial) y el botón *🗂 Explorador* (`data-role="toggle-explorer"`); pestañas de documentos; barra de botones del editor (con **▶ Ejecutar** al principio: no hay otra fila de botones ni texto de ayuda debajo del editor —la ayuda está en el tooltip— para que el resultado quede pegado a la consulta en los pantallazos de evidencia; el **⬇ CSV** es un botón pequeño en la línea de resumen del resultado, fuera del formulario y asociado con `form="qc-run-form"`); el editor (`<textarea data-role="sql">` + `<canvas data-role="gutter">`); la grilla; tres modales (*conexión*, *confirmar cambios de la grilla*, *selector de rutas*); y un bloque `<style>` con todo el CSS propio (clases `qc-*`).
 El contenedor raíz lleva los datos para el JS: `data-query-console data-kind="oracle|sqlserver" data-base-url data-kinds (JSON) data-has-databases data-selected-alias data-selected-database data-selected-schema`. Los elementos con comportamiento se localizan por **`data-role="…"`** (no por id/clase).
 La grilla (`<div class="qc-results" data-role="results-grid" data-edit="…JSON…">`): `data-edit` **solo existe si el resultado es editable** y trae `{alias, database, schema, table, primaryKey[], columns[{name, editable, nullable, category, reason}]}`; las celdas nulas llevan la clase `qc-null`; las cabeceras editables llevan `✏️`. Cada celda usa `CellText.Format` (el mismo texto que se compara al guardar).
 
@@ -359,15 +375,17 @@ La grilla (`<div class="qc-results" data-role="results-grid" data-edit="…JSON�
 
 ## 7. El front-end (JavaScript plano)
 
-Sin framework, sin transpilar. Cada archivo es una IIFE; comparten el espacio global `window.QC`. Los cuatro archivos con lógica pura (`qc-mru.js`, `query-complete.js`, `query-edit.js`, `query-explorer.js`) se dividen en **lógica sin DOM** (exportada con `module.exports` y probada con `node --test`) e **interfaz** (solo si hay `window` y `document`). Orden de carga: ver §6.2.
+Sin framework, sin transpilar. Cada archivo es una IIFE; comparten el espacio global `window.QC`. Los archivos con lógica pura (`qc-mru.js`, `qc-workspace.js`, `query-complete.js`, `query-edit.js`, `query-explorer.js`) se dividen en **lógica sin DOM** (exportada con `module.exports` y probada con `node --test`) e **interfaz** (solo si hay `window` y `document`). Orden de carga: ver §6.2.
 
 | Archivo | Responsabilidad |
 |---|---|
 | [qc-common.js](DataBaseSDK.Web/wwwroot/js/qc-common.js) | `window.QC`: `el`, `qs`, `readJson/writeJson` (localStorage con try/catch), `get(handler, params)`, `post(handler, body)` (JSON + token antiforgery, errores con `.code`/`.status`), `toast`, `node` (nodo de árbol perezoso), `selectRow`, `clearSelection`, `muted`; `QC.editor` lo define query-editor |
 | [qc-mru.js](DataBaseSDK.Web/wwwroot/js/qc-mru.js) | orden de uso reciente de las pestañas para `Ctrl+Tab` (lógica pura: `window.QC.mru`) |
+| [qc-workspace.js](DataBaseSDK.Web/wwwroot/js/qc-workspace.js) | sesión versionada (lógica pura: `window.QC.workspace`): `snapshot` (qué mandar), `signature` (evita mandar lo mismo en cada tecla), `reconcile` (qué abrir/cerrar si el repo cambió), caché de resultados por pestaña (`putResult`, `dropOldest`, `removeResults`) |
 | [query-editor.js](DataBaseSDK.Web/wwwroot/js/query-editor.js) | pestañas, archivos `.sql`, selector de rutas, gutter, caché de sesión, arrastrar y soltar, atajos, `Ctrl+Tab`, panel izquierdo |
 | [query-complete.js](DataBaseSDK.Web/wwwroot/js/query-complete.js) | autocompletado (lógica + ventanita) |
 | [query-edit.js](DataBaseSDK.Web/wwwroot/js/query-edit.js) | edición de celdas de la grilla (validación + armado del pedido + UI) |
+| [query-results.js](DataBaseSDK.Web/wwwroot/js/query-results.js) | resultado propio por pestaña (§7.3b): guarda el de la pestaña que ejecutó y muestra el de la activa |
 | [query-explorer.js](DataBaseSDK.Web/wwwroot/js/query-explorer.js) | explorador de archivos de la derecha (carpeta abierta como árbol, `Ctrl+K`) |
 | [query-console.js](DataBaseSDK.Web/wwwroot/js/query-console.js) | conexiones (diálogo, probar/guardar/borrar), explorador en árbol, panel de detalle, búsqueda, historial, selectores de contexto |
 
@@ -376,6 +394,7 @@ Sin framework, sin transpilar. Cada archivo es una IIFE; comparten el espacio gl
 - **Pestañas:** cada archivo abierto y cada "Consulta N" sin guardar; `●` = cambios sin guardar. `QC.editor` expone `showQuery(text)` (pone una consulta sin pisar un archivo abierto: si la pestaña activa es un archivo abre una nueva), `insertAtCursor(text)` (vía `execCommand('insertText')` para conservar Ctrl+Z), `getRunText()` (selección o todo), `focus()`; y, para el explorador de archivos: `openFile(path)` (abre o activa la pestaña de ese archivo), `pickFolder({title, folder})` (el selector de rutas en modo carpeta → ruta o `null`), `tabsInfo()` y `onTabsChanged(fn)` (`fn({activePath, open[], dirty[]})` se llama ya y en cada cambio de pestañas — `renderTabs` corre en cada tecla, así que los oyentes deben ser baratos).
 - **Atajos:** `Ctrl+Enter` ejecutar (**la selección, o todo el texto si no hay selección**), `Ctrl+S` guardar, `Ctrl+Shift+S` guardar como, `Ctrl+O` abrir, `Ctrl+B` mostrar/ocultar el panel izquierdo, `Ctrl+K` mostrar/ocultar el explorador de archivos de la derecha (§7.4), `Ctrl+Tab` / `Ctrl+Mayús+Tab` cambiar al archivo anterior / al más antiguo (más abajo), `Tab` inserta 4 espacios, `Ctrl+Espacio` fuerza el autocompletado. (En el navegador `Ctrl+N/W/T` están reservados y no se pueden usar; `Ctrl+K` sí se puede secuestrar con `preventDefault`.)
 - **`Ctrl+Tab`: cambiar al archivo anterior, como SSMS.** Las pestañas llevan un **orden de uso reciente** (`mru`, lógica pura en [qc-mru.js](DataBaseSDK.Web/wwwroot/js/qc-mru.js): `touch` al activar una pestaña, `remove` al cerrarla, `restore` al arrancar). `Ctrl+Tab` salta a la pestaña usada justo antes —repetido, **alterna entre las dos últimas**—; **manteniendo `Ctrl`** y pulsando `Tab` otra vez se recorren las anteriores (`Mayús+Tab` en sentido contrario, empezando por la más antigua), **al soltar `Ctrl` se cambia** a la elegida y `Esc` cancela. Si `Ctrl` se mantiene 220 ms aparece la lista **"Archivos activos"** (`.qc-switcher`: nombre, `●` si hay cambios, carpeta; las filas se pueden pulsar con el mouse); un toque rápido cambia sin mostrarla. El orden se guarda en la sesión (`qc-session-<kind>.mru`) y **sobrevive a las recargas** (cada consulta ejecutada recarga la página). Con un diálogo abierto no actúa; si la ventana pierde el foco con `Ctrl` apretado se cancela; si se pierde el "soltar Ctrl", cualquier tecla sin `Ctrl` cierra la lista aplicando la elección. **Limitación del navegador:** Chromium **reserva `Ctrl+Tab`** en las pestañas normales (la página ni lo recibe) pero **no** en una ventana tipo aplicación (`msedge --app`, la que abre `start.cmd`): ahí funciona; en una pestaña normal del navegador el atajo no existe.
+- **Sesión versionada (§5.11):** además de la caché, las rutas de las pestañas (sin texto) y la activa se mandan a `SaveWorkspace` (solo si cambió la firma, con *debounce*). Al arrancar, tras revisar el disco, se pide `Workspace`: si su `stamp` no es el que esta sesión vio por última vez (git pull, otra computadora) se abren los archivos del repo que falten y se cierran las pestañas **limpias** que el repo ya no tiene (nunca las con cambios, las consultas sin archivo ni las que conservan la caché); una "Consulta 1" vacía sobra y se cierra. Si el repo aún no tiene nada, manda lo local. Antes de esa comparación no se envía nada.
 - **Caché de sesión:** las pestañas abiertas (ruta, texto sin guardar, cursor, marcas) se guardan en `localStorage` (`qc-session-<kind>`, una sesión por motor) con *debounce* y al salir (`pagehide`/`beforeunload`); si el almacenamiento está lleno se avisa una vez. Al restaurar se comprueba cada archivo en disco (`StatFile`): **si ya no existe** la pestaña queda marcada ⚠ y tachada **conservando el contenido de la caché** (reintentar / guardar como / cerrar); **si cambió** y no hay cambios locales se recarga; si hay cambios locales se avisa y al guardar se pide confirmación (pisar lo del otro programa).
 - **Archivos:** abrir/guardar por el servidor (`ReadFile`/`SaveFile`), con detección de conflicto por `version`; **selector de rutas** propio (modal con accesos rápidos, escribir/pegar una ruta, "Ir", árbol de carpetas) porque el navegador no da rutas reales; panel *Archivos .sql* con **carpetas agregadas** (`qc-roots`) y **recientes** (`qc-recent`, 12).
 - **Arrastrar y soltar:** hasta **10** archivos `.sql` de ≤ 5 MB a cualquier parte de la página; se ignora lo que no es `.sql`. Como el navegador no entrega la ruta: `LocateFile` busca por nombre+tamaño en las carpetas de trabajo/recientes/pestañas y el cliente **confirma que el contenido sea idéntico**; si lo encuentra, queda enlazado al archivo real; si no, se abre como "archivo arrastrado" sin ruta y *Guardar* pregunta la carpeta.
@@ -394,6 +413,11 @@ Solo se activa si existe `[data-role="results-grid"][data-edit]`. **El navegador
 - **Interfaz:** doble clic en una celda `td.qc-editable` abre un editor en la celda (`<input>` + botones ∅ NULL / ✓ / ✕; los botones usan `mousedown.preventDefault` para no robar el foco al campo); Enter/✓ acepta, Esc/✕ cancela, salir de la celda acepta; un valor inválido avisa con un *toast* y deja el editor abierto. Estado: `Map<tr, {columna → {original, value}}>`; el "original" es lo que devolvió el servidor, no lo que se ve (`data-orig` / `data-orig-null` guardados al primer cambio). Celda **naranja** = pendiente; barra roja "N cambio(s) sin guardar en M fila(s)" con *Revisar y confirmar…* y *Descartar cambios*; `beforeunload` avisa si hay pendientes.
 - **Diálogo de confirmación** (modal estático): tabla *Fila (clave primaria) · Columna · Antes (tachado) · Después*; casilla **"Entiendo que esto modifica datos reales de {alias}"** (sin marcarla el botón *Confirmar y guardar* está deshabilitado); **Probar (no guarda)** (`dryRun: true`); al guardar con éxito las celdas pasan a **verde** y su valor pasa a ser el nuevo original (sin volver a consultar), con un *toast*. Errores: se muestran en el diálogo (los de `conflict`/`not_found` ya dicen que no se guardó nada); el cambio sigue pendiente.
 - El alias que viaja es el **de la consulta** (`data-edit.alias`), no el del selector actual (que pudo cambiar después).
+
+### 7.3b Cada pestaña es su propia consola (como las ventanas de consulta de SSMS)
+- **Conexión por pestaña.** Cada pestaña guarda `alias`, `database` (SQL Server) y `schema` (Oracle) en `qc-session-<kind>` y, si es un archivo, en `db-workspace.json` (§5.11). Al activar una pestaña, `query-console.js` (`followActiveTab`, enganchado con `QC.editor.onTabsChanged` recién cuando la lista de conexiones cargó) pone esos valores en los selectores sin disparar "cambio del usuario" (`applying`); lo que el usuario elige (o el árbol con *SELECT 100*) cambia solo la pestaña activa (`QC.editor.setActiveContext`). Una pestaña sin contexto (nueva, o un archivo recién abierto) **hereda** la conexión actual. Si la conexión de una pestaña no existe en esta máquina, se queda la actual. Como el formulario `Run` manda lo que muestran los selectores, cada pestaña ejecuta contra su propia conexión.
+- **Resultado por pestaña** ([query-results.js](DataBaseSDK.Web/wwwroot/js/query-results.js)). El formulario manda `TabId` (la pestaña activa); el servidor envuelve error/resultado en `<div data-role="results-area" data-tab data-alias data-database data-schema>`. Al cargar, ese bloque se asigna a la pestaña `data-tab`: el nodo vivo queda en memoria (la edición de celdas sigue funcionando, aunque se cambie de pestaña y se vuelva) y una **copia de solo lectura** (sin `data-edit` ni barra de edición) va a **`sessionStorage`** `qc-results-<kind>` (máx. 12 pestañas; si no entra se descartan las más viejas; un resultado de más de ~1,5 M caracteres se guarda solo como "demasiado grande"). Al mostrar una copia se antepone "🕘 Resultado conservado de las HH:MM (conexión)". Cerrar una pestaña olvida su resultado. `sessionStorage` y no `localStorage` a propósito: son datos reales, se borran al cerrar la ventana y nunca quedan en disco ni en git.
+- **Límite:** la edición de celdas solo funciona sobre el resultado recién ejecutado de esa carga de página; tras recargar (otra consulta, o ir a la otra consola) los resultados conservados son de solo lectura hasta volver a ejecutar. No hay ejecución en paralelo: ejecutar sigue recargando la página.
 
 ### 7.4 Explorador de archivos de la derecha ([query-explorer.js](DataBaseSDK.Web/wwwroot/js/query-explorer.js), `Ctrl+K`)
 Como el explorador de VS Code: **una carpeta abierta** mostrada como árbol. `Ctrl+K` (o el botón *🗂 Explorador*) lo muestra y lo oculta; no mueve el foco. Es una columna más del layout (`.qc-layout.qc-explorer-open`; ver el CSS `.qc-explorer` / `.qx-*` en `_QueryConsole.cshtml`; en pantallas < 992 px se apila debajo del editor). Con el panel izquierdo (380 px) y el explorador (300 px) abiertos, el editor se angosta en pantallas chicas: `Ctrl+B` oculta el izquierdo.
@@ -414,7 +438,7 @@ Como el explorador de VS Code: **una carpeta abierta** mostrada como árbol. `Ct
 - **Historial:** últimas 25 consultas ejecutadas por motor (`qc-history-<kind>`).
 
 ### 7.6 `localStorage` (todo es conveniencia del navegador; nunca estado crítico)
-`qc-session-<kind>` (pestañas y su orden de uso `mru`), `qc-recent`, `qc-roots`, `qc-lastdir`, `qc-pane`, `qc-side`, `qc-explorer` (explorador de archivos, §7.4), `qc-alias-<kind>`, `qc-history-<kind>`. Cada lectura/escritura va en `try/catch`: sin `localStorage` la página funciona igual.
+`qc-session-<kind>` (pestañas con su conexión, su orden de uso `mru` y el sello del repo), `qc-recent`, `qc-roots`, `qc-lastdir`, `qc-pane`, `qc-side`, `qc-explorer` (explorador de archivos, §7.4), `qc-history-<kind>`. En **`sessionStorage`** (se borra al cerrar la ventana: son datos reales): `qc-results-<kind>` (el último resultado de cada pestaña, §7.3b). Cada lectura/escritura va en `try/catch`: sin `localStorage` la página funciona igual.
 
 ### 7.7 Estilos y tema
 Bootstrap **5.1.0** (no trae tema oscuro: `[data-bs-theme]` llegó en 5.3). [dark-theme.css](DataBaseSDK.Web/wwwroot/css/dark-theme.css) fija las variables `--db-bg/-surface/-surface-2/-border/-text/-text-muted/-link` y pisa a mano navbar, cards, tablas, formularios, botones outline, alertas, badges y modales. **Todo CSS nuevo debe usar `--db-*`**: usar `--bs-body-bg` & co. deja blanco sobre blanco (así falló la cabecera de la tabla de resultados). Los estilos propios de la consola (`qc-*`) están en el `<style>` de `_QueryConsole.cshtml`.
@@ -432,6 +456,8 @@ Bootstrap **5.1.0** (no trae tema oscuro: `[data-bs-theme]` llegó en 5.3). [dar
 | `DBSDK_PORT` | puerto (defecto **5130**); solo escucha en localhost |
 | `DBSDK_CONNECTIONS_FILE` | ruta del archivo de conexiones guardadas (defecto `.local\db-connections.json`) |
 | `DBSDK_IMPORT_CONNECTIONS_FROM` | origen de la importación única de conexiones (`none` la apaga) |
+| `DBSDK_SHARED_CONNECTIONS_FILE` | ruta de la copia versionada sin contraseñas (defecto `db-connections.shared.json` en la raíz; `none` la apaga) |
+| `DBSDK_WORKSPACE_FILE` | ruta de la sesión versionada (pestañas y conexión por motor; defecto `db-workspace.json` en la raíz; `none` la apaga) |
 | `DBSDK_OPEN_BROWSER` | `1` = abrir la ventana de Edge al arrancar (lo pone `start.cmd`) |
 
 ### 8.2 Datos locales (`.local\`, ignorada por git)
@@ -453,7 +479,7 @@ Este proyecto nació del módulo de bases de datos de `AzureDevOpsSdk`. La **pri
 | Consulta que escribe o ejecuta cosas | `ReadOnlySqlGuard` + transacción nunca confirmada + `SET TRANSACTION READ ONLY` (Oracle) — **red contra errores, no frontera**: usar un usuario de solo lectura |
 | Inyección de SQL desde el navegador | nombres siempre como parámetros o por `ChangeDatabase`; esquema de Oracle con lista blanca; en edición el SQL usa solo nombres del catálogo |
 | Escritura accidental o a la base equivocada | opt-in por conexión (apagado por defecto), confirmación con casilla, "Probar" sin guardar, bitácora previa al commit, verificación de valores originales, exactamente 1 fila por `UPDATE`, 200 filas máx. |
-| Fuga de contraseñas | DPAPI en disco, nunca vuelven al navegador, nunca en `Description`, `.local/` y `.env` ignorados por git |
+| Fuga de contraseñas | DPAPI en disco, nunca vuelven al navegador, nunca en `Description`, `.local/` y `.env` ignorados por git; la copia versionada (`db-connections.shared.json`) no tiene campo de contraseña. **Ojo:** sí expone servidores y usuarios, y el repo de GitHub es público |
 | Lectura/escritura arbitraria de archivos | el servicio solo toca `.sql` ≤ 5 MB; `Locate` rechaza nombres con ruta |
 | Datos sensibles en la bitácora | valores recortados a 200 caracteres; el archivo está en `.local/` (no se versiona) |
 
@@ -462,8 +488,8 @@ Este proyecto nació del módulo de bases de datos de `AzureDevOpsSdk`. La **pri
 ## 10. Pruebas
 
 ```bash
-dotnet test                                                         # 238 casos, ~1 s
-node --test DataBaseSDK.Web/js-tests/query-complete.test.js DataBaseSDK.Web/js-tests/query-edit.test.js DataBaseSDK.Web/js-tests/query-explorer.test.js DataBaseSDK.Web/js-tests/query-mru.test.js   # 50 casos
+dotnet test                                                         # 256 casos, ~1 s
+node --test DataBaseSDK.Web/js-tests/query-complete.test.js DataBaseSDK.Web/js-tests/query-edit.test.js DataBaseSDK.Web/js-tests/query-explorer.test.js DataBaseSDK.Web/js-tests/query-mru.test.js DataBaseSDK.Web/js-tests/qc-workspace.test.js   # 57 casos
 ```
 (Node 20+. Se pasan los **archivos**: pasar la carpeta falla en esta versión de Node.)
 
@@ -474,13 +500,15 @@ node --test DataBaseSDK.Web/js-tests/query-complete.test.js DataBaseSDK.Web/js-t
 - **RowEditingTests**: `SingleTableAnalyzer` (aceptados y rechazados), `PrepareAsync` (nombres por motor, PK en el SELECT, vistas, sin PK…), `ApplyAsync` (SQL exacto, bloqueo, conflicto, lote atómico, 1 fila exacta, prueba en seco, bitácora previa, fallo de bitácora → nada se guarda, fallos de base, validaciones, nombres maliciosos), `ParseValue`, `ColumnCategories`, `FileEditAuditLog`.
 - **TableDescribeTests**: `DescribeTableAsync` de ambos motores (parámetros, flags, identity de 11g, nulo si no es tabla), `AllowWrite` en almacén y catálogo, `DBSDK_WRITE`.
 - **SqlFileServiceTests**: navegación, codificaciones (UTF-8/BOM/UTF-16/Latin-1), CRLF/LF, conflictos de versión, archivo desaparecido, `Locate`, `ProjectPaths` (exige que exista `.gitignore` con `.local` en la raíz).
-- **LocalAccessAndImportTests**: `LocalAccess` (loopback/`Host`, DNS rebinding, IPv4 mapeada) e importación única (clave descifrable, `allowWrite` forzado a `false`, una sola vez, origen ausente/corrupto, sin origen cuando se da ruta explícita).
+- **LocalAccessAndImportTests**: `LocalAccess` (loopback/`Host`, DNS rebinding, IPv4 mapeada), importación única (clave descifrable, `allowWrite` forzado a `false`, una sola vez, origen ausente/corrupto, sin origen cuando se da ruta explícita) y copia versionada (`SharedConnectionsFileTests`: sin clave ni `allowWrite`, otra máquina la ve sin clave y guarda la suya local, publicación al arrancar sin pisar, borrado en ambos lados, archivo dañado intacto).
+- **WorkspaceStoreTests**: sección por motor, rutas relativas que sirven en otra carpeta/máquina (mismo sello), rutas fuera del repo, rechazo de lo que no es `.sql` completo, duplicados y tope, conexión propia por archivo, sello estable y sin reescritura innecesaria, `..` que sale del repo y archivo con conflicto de merge intacto, nombres inválidos.
 
 ### 10.1b Qué cubre cada archivo de Node (`js-tests/`)
 - **query-complete.test.js** (23): análisis del texto para el autocompletado (`analyze`, `parseTables`, alias, `FROM ventas.`…).
 - **query-edit.test.js** (7): `validateInput` por categoría, `isTruncated`, `buildRequest` (solo celdas cambiadas).
 - **query-explorer.test.js** (13): rutas (`normalizePath`, `isInside`, `relativeSegments`, `folderName`), `normalizeState`, `rememberFolder`, `groupByDepth`, `keyAction` (todas las teclas, bordes y "nada seleccionado").
 - **query-mru.test.js** (7): `touch`, `remove`, `restore` (pestañas que ya no existen / sin repetir / activa al frente), `startIndex`, `step` (dar la vuelta).
+- **qc-workspace.test.js** (7): `snapshot` (sin consultas sueltas ni archivos desaparecidos, con la conexión de cada archivo), `signature`, `reconcile` (nunca cierra trabajo sin guardar; contexto para las ya abiertas), caché de resultados (`putResult` con tope, `dropOldest`, `removeResults`, `normalizeCache`).
 La interfaz (DOM) de estos módulos no tiene pruebas automáticas: se verifica en el navegador.
 
 ### 10.2 Los fakes (en [QueryRunnerTests.cs](DataBaseSDK.Tests/QueryRunnerTests.cs))
@@ -492,7 +520,7 @@ La interfaz (DOM) de estos módulos no tiene pruebas automáticas: se verifica e
 
 **Sin probar contra servidores reales (Oracle / SQL Server):** (1) las consultas de catálogo (`sys.*` / `all_*`) con los permisos reales; (2) la conversión de tipos propios de Oracle (`NUMBER` grande, `CLOB`/`BLOB`); (3) `SET TRANSACTION READ ONLY`; (4) en la edición: los `UPDATE` con `UPDLOCK` / `FOR UPDATE WAIT 5`, la lectura de la PK de `sys.indexes` / `all_constraints`, y los tipos de parámetro (sobre todo fechas). **Probar la edición primero en una base de desarrollo** y revisar `data-edits.log` tras el primer guardado.
 
-**Verificado:** compilación sin advertencias; 238 + 30 pruebas automáticas; en esta copia, la portada, `/SqlServer` y `/Oracle` cargan sin errores de consola, los estilos con `--db-*` se aplican, la importación de conexiones funciona (llegaron con `allowWrite = false`) y `start.cmd` levanta el sitio y abre la ventana. El **explorador de archivos** (`Ctrl+K`) sí se verificó entero en el navegador acá, con una carpeta real de scripts anidados: mostrar/ocultar con la tecla real, abrir carpeta desde el selector, desplegar/plegar con mouse y teclado, abrir archivos (pestaña + resaltado + ● de modificado), auto-desplegado al cambiar de pestaña, contraer todo, actualizar (archivo nuevo creado desde fuera), cerrar carpeta y recientes, carpeta inexistente, restauración tras recargar (con el panel visible y oculto — oculto no hace ninguna petición), la página de Oracle y el diseño en pantalla angosta. Las **interacciones completas** de la interfaz (árbol, abrir/guardar archivos, autocompletado, arrastrar y soltar, editar celdas con prueba en seco / guardado / conflicto) se verificaron en el navegador en el proyecto de origen (`AzureDevOpsSdk`) con exploradores y editores de demostración en memoria; el código es el mismo (solo cambian nombres y estilos), pero **no se repitió esa pasada completa acá**.
+**Verificado:** compilación sin advertencias; 256 + 57 pruebas automáticas; en esta copia, la portada, `/SqlServer` y `/Oracle` cargan sin errores de consola, los estilos con `--db-*` se aplican, la importación de conexiones funciona (llegaron con `allowWrite = false`) y `start.cmd` levanta el sitio y abre la ventana. El **explorador de archivos** (`Ctrl+K`) sí se verificó entero en el navegador acá, con una carpeta real de scripts anidados: mostrar/ocultar con la tecla real, abrir carpeta desde el selector, desplegar/plegar con mouse y teclado, abrir archivos (pestaña + resaltado + ● de modificado), auto-desplegado al cambiar de pestaña, contraer todo, actualizar (archivo nuevo creado desde fuera), cerrar carpeta y recientes, carpeta inexistente, restauración tras recargar (con el panel visible y oculto — oculto no hace ninguna petición), la página de Oracle y el diseño en pantalla angosta. Las **interacciones completas** de la interfaz (árbol, abrir/guardar archivos, autocompletado, arrastrar y soltar, editar celdas con prueba en seco / guardado / conflicto) se verificaron en el navegador en el proyecto de origen (`AzureDevOpsSdk`) con exploradores y editores de demostración en memoria; el código es el mismo (solo cambian nombres y estilos), pero **no se repitió esa pasada completa acá**.
 
 **Límites conocidos:** `Ctrl+Tab` solo funciona en la ventana tipo aplicación de `start.cmd` (en una pestaña normal el navegador lo reserva); el selector se probó en el navegador integrado con la tecla real (que entra a la página) y con eventos de teclado simulados para "mantener Ctrl" — **no** se probó en la ventana de Edge del usuario; el editor no tiene resaltado de sintaxis; archivos > ~2000 líneas marcan todo como cambiado en el gutter; no probado en Firefox ni en un *drop* real del escritorio (se usó un `DragEvent` sintético); una fecha con fracciones se guarda sin ellas al editarla; en Oracle `''` = `NULL`; sin plan de ejecución, sin varios resultados por script, sin `EXEC`; resultados de hasta 10.000 filas en el DOM (pesado); no hay autocompletado de procedimientos.
 
@@ -507,7 +535,7 @@ La interfaz (DOM) de estos módulos no tiene pruebas automáticas: se verifica e
 - **Heredocs enormes** en Git Bash fallan (`unexpected EOF`): escribir archivos largos con una herramienta de archivos, no con `cat <<EOF`.
 - **PowerShell:** `Set-Location` **no** cambia el directorio de proceso de los programas nativos (`cmd /c start.cmd` no lo encuentra): usar rutas completas. Las variables de entorno de una llamada no persisten a la siguiente.
 - **Node:** `node --test <carpeta>` falla en esta versión; pasar los archivos.
-- **No hay repositorio git** (existe `.gitignore`, pero no `.git`): `git status/diff` no funcionan. Si se inicializa, `.env` y `.local/` ya están ignorados.
+- **Repositorio git** con `origin` en `github.com/is-jsandoval/DataBaseSDK` (**público**): `.env` y `.local/` están ignorados; `db-connections.shared.json` sí se sube.
 - **Ruta fija de la importación:** `..\AzureDevOpsSdk\.local\…` (carpeta hermana). Si se mueve el proyecto, la importación simplemente no encuentra origen (no falla).
 
 ---

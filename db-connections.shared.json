@@ -1,0 +1,28 @@
+{
+  "connections": [
+    {
+      "alias": "Bg_Core_DESA",
+      "kind": "Oracle",
+      "host": "172.26.61.160",
+      "port": 1521,
+      "database": null,
+      "oracleMode": "ServiceName",
+      "oracleTarget": "BGCOREDB",
+      "windowsAuth": false,
+      "user": "Bg_TP",
+      "trustServerCertificate": true
+    },
+    {
+      "alias": "172.26.61.61.4433",
+      "kind": "SqlServer",
+      "host": "172.26.61.61",
+      "port": 4433,
+      "database": null,
+      "oracleMode": "ServiceName",
+      "oracleTarget": null,
+      "windowsAuth": false,
+      "user": "apl_portalcomercios",
+      "trustServerCertificate": true
+    }
+  ]
+}

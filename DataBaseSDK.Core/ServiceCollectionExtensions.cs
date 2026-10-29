@@ -19,6 +19,9 @@ public static class DatabaseServiceCollectionExtensions
 
         services.AddSingleton<ISqlFileService, SqlFileService>();
 
+        // Pestañas abiertas y conexión elegida por motor, en <repo>\db-workspace.json (versionado; sin texto ni claves).
+        services.AddSingleton<IWorkspaceStore>(_ => new WorkspaceStore());
+
         services.AddSingleton<IDbExplorer, OracleExplorer>();
         services.AddSingleton<IDbExplorer, SqlServerExplorer>();
 

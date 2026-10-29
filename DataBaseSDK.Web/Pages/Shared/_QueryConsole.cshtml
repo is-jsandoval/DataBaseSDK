@@ -78,8 +78,9 @@
 
         @* ---------- Editor y resultados ---------- *@
         <section class="qc-main">
-            <form method="post" asp-page-handler="Run" data-role="form">
+            <form method="post" asp-page-handler="Run" data-role="form" id="qc-run-form">
                 <input type="hidden" name="Sql" data-role="sql-submit" value="@Model.Sql">
+                <input type="hidden" name="TabId" data-role="tab-id" value="@Model.TabId">
 
                 <div class="d-flex flex-wrap gap-2 align-items-end mb-2">
                     <button type="button" class="btn btn-outline-secondary btn-sm" data-role="toggle-side" title="Ocultar el panel izquierdo (Ctrl+B)">☰</button>
@@ -140,6 +141,10 @@
                 <div class="qc-tabs" data-role="tabs"></div>
 
                 <div class="d-flex flex-wrap gap-1 align-items-center my-1">
+                    @* Ejecutar va aquí, chico, para que debajo del editor vengan directo los resultados (pantallazos de evidencia
+                       con la consulta y su resultado juntos). La ayuda queda en el tooltip; lo normal es usar Ctrl+Enter. *@
+                    <button type="submit" class="btn btn-primary btn-sm py-0" data-role="run"
+                            title="Ejecutar (Ctrl+Enter): lo seleccionado, o todo el texto si no hay selección. Una sola sentencia que empiece con SELECT o WITH. Ctrl+Espacio sugiere tablas y columnas; Ctrl+K muestra el explorador de archivos; Ctrl+B el panel izquierdo; Ctrl+Tab cambia al archivo anterior; arrastra un archivo .sql para abrirlo.">▶ Ejecutar</button>
                     <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="btn-new" title="Nueva consulta sin guardar">＋ Nueva</button>
                     <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="btn-open" title="Abrir un archivo .sql (Ctrl+O)">📂 Abrir...</button>
                     <button type="button" class="btn btn-outline-secondary btn-sm py-0" data-role="btn-save" title="Guardar (Ctrl+S)">💾 Guardar</button>
@@ -161,17 +166,14 @@
                 </div>
                 </div>
                 <div class="small text-muted qc-statusbar" data-role="statusbar"></div>
-
-                <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
-                    <button type="submit" class="btn btn-primary btn-sm" data-role="run" title="Ejecuta lo seleccionado, o todo el texto si no hay selección">▶ Ejecutar <span class="opacity-75">(Ctrl+Enter)</span></button>
-                    <button type="submit" class="btn btn-outline-secondary btn-sm" asp-page-handler="Csv">⬇ Descargar CSV</button>
-                    <span class="small text-muted">Una sola sentencia que empiece con SELECT o WITH. Con texto seleccionado se ejecuta solo la selección. Ctrl+Espacio sugiere tablas y columnas; Ctrl+K muestra el explorador de archivos; Ctrl+Tab cambia al archivo anterior; arrastra un archivo .sql aquí para abrirlo.</span>
-                </div>
             </form>
 
+            @* El resultado (o el error) pertenece a la pestaña que ejecutó (data-tab): query-results.js lo guarda para ella y
+               muestra el de cada pestaña al cambiar, como SSMS. *@
+            <div data-role="results-area" data-tab="@Model.TabId" data-alias="@Model.Alias" data-database="@Model.Database" data-schema="@Model.Schema">
             @if (Model.Error != null)
             {
-                <div class="alert @(Model.Rejected ? "alert-warning" : "alert-danger") mt-3 mb-0" style="white-space: pre-wrap;">@(Model.Rejected ? "🔒 " : "")@Model.Error</div>
+                <div class="alert @(Model.Rejected ? "alert-warning" : "alert-danger") mt-2 mb-0" style="white-space: pre-wrap;">@(Model.Rejected ? "🔒 " : "")@Model.Error</div>
             }
 
             @if (Model.Result != null)
@@ -187,9 +189,11 @@
                         new { alias = Model.Alias, database = edit.Database, schema = edit.Schema, table = edit.Table, primaryKey = edit.PrimaryKey, columns = edit.Columns },
                         new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
 
-                <div class="d-flex justify-content-between align-items-center mt-3 mb-1 small text-muted">
+                <div class="d-flex justify-content-between align-items-center mt-2 mb-1 small text-muted">
                     <span>
                         <strong>@result.Rows.Count</strong> fila(s) · @result.Columns.Count columna(s) · @result.ElapsedMilliseconds ms
+                        @* Está fuera del formulario (los resultados van debajo del editor): form= lo asocia igual, con el Sql y la conexión de la pestaña. *@
+                        · <button type="submit" form="qc-run-form" asp-page-handler="Csv" class="btn btn-link btn-sm p-0 align-baseline small" title="Vuelve a ejecutar la consulta y descarga el resultado como CSV">⬇ CSV</button>
                         @if (edit != null)
                         {
                             <span class="badge bg-danger ms-1" title="Tabla @(edit.Schema + "." + edit.Table) · clave primaria: @string.Join(", ", edit.PrimaryKey)">✏️ editable · @edit.Table</span>
@@ -266,6 +270,7 @@
                     }
                 </div>
             }
+            </div>
         </section>
 
         @* ---------- Explorador de archivos (derecha, como el de VS Code): una carpeta abierta como árbol. Ctrl+K lo muestra / oculta. ---------- *@

@@ -64,12 +64,14 @@
         if (!dbSel) return;
         ensureOption(dbSel, name);
         dbSel.value = name || '';
+        contextChanged();
     }
 
     function setSchema(name) {
         if (!schemaSel) return;
         ensureOption(schemaSel, name);
         schemaSel.value = name || '';
+        contextChanged();
     }
 
     var optionsLoadedFor = null;
@@ -111,8 +113,70 @@
         if (dbSel) dbSel.value = '';
         if (schemaSel) schemaSel.value = '';
         updateDescription();
-        try { localStorage.setItem('qc-alias-' + kind, aliasSel.value); } catch (e) { }
+        contextChanged();
     }
+
+    // ---------- contexto por pestaña (como cada ventana de consulta de SSMS) ----------
+    // Cada pestaña del editor tiene SU conexión, base y esquema: al cambiar de pestaña los selectores muestran los de
+    // ella, y lo que el usuario elige aquí solo cambia la pestaña activa. Una pestaña sin contexto hereda el actual.
+
+    var applying = false;    // mientras se aplica el contexto de una pestaña, los cambios no son "del usuario"
+    var lastActiveId = null;
+
+    function currentContext() {
+        return { alias: aliasSel.value, database: dbSel ? dbSel.value : null, schema: schemaSel ? schemaSel.value : null };
+    }
+
+    function contextChanged() {
+        if (applying) return;
+        if (QC.editor && QC.editor.setActiveContext) QC.editor.setActiveContext(currentContext());
+        rememberContext();
+    }
+
+    function applyContext(ctx) {
+        var known = Array.prototype.some.call(aliasSel.options, function (o) { return o.value === ctx.alias; });
+        if (!known) return false;   // la conexión no existe en esta máquina: se queda la actual
+
+        applying = true;
+        try {
+            if (aliasSel.value !== ctx.alias) {
+                aliasSel.value = ctx.alias;
+                optionsLoadedFor = null;
+                updateDescription();
+            }
+            setDatabase(ctx.database || '');
+            setSchema(ctx.schema || '');
+        } finally {
+            applying = false;
+        }
+
+        rememberContext();
+        return true;
+    }
+
+    function followActiveTab(info) {
+        if (info.activeId === lastActiveId) return;
+        lastActiveId = info.activeId;
+
+        var ctx = QC.editor.activeContext();
+        if (!ctx || !applyContext(ctx)) QC.editor.setActiveContext(currentContext());
+    }
+
+    // La conexión elegida (y su base o esquema) también se recuerda para la consola en db-workspace.json: es con la que
+    // arrancan las pestañas nuevas al volver de la otra consola u otra computadora. Si falla no pasa nada: es una comodidad.
+    function rememberContext() {
+        if (!aliasSel.value) return;
+        post('SaveWorkspace', {
+            context: true,
+            alias: aliasSel.value,
+            database: dbSel ? dbSel.value : null,
+            schema: schemaSel ? schemaSel.value : null
+        }).catch(function () { });
+    }
+
+    [dbSel, schemaSel].forEach(function (select) {
+        if (select) select.addEventListener('change', contextChanged);
+    });
 
     var connectionsCache = [];
 
@@ -609,5 +673,8 @@
 
     // ---------- arranque ----------
 
-    refreshConnections(root.dataset.selectedAlias);
+    // Recién con la lista de conexiones cargada se puede aplicar la de la pestaña activa (y seguir los cambios de pestaña).
+    refreshConnections(root.dataset.selectedAlias).then(function () {
+        if (QC.editor && QC.editor.onTabsChanged) QC.editor.onTabsChanged(followActiveTab);
+    });
 })();
